@@ -8,11 +8,7 @@
       }
     },
     "sentry": {
-      "command": "npx",
-      "args": ["@sentry/mcp-server@latest"],
-      "env": {
-        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
-      }
+      "command": "sentry-mcp"
     }
   }
 }

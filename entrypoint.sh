@@ -70,11 +70,12 @@ cp -rf /source/approvers  /monorepo/approvers  2>/dev/null || true
 cp -rf /source/actors     /monorepo/actors     2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Generate ~/.claude/settings.json based on AGENT_TOOLS env var
+# Generate /monorepo/.mcp.json based on AGENT_TOOLS env var
+# Claude Code reads MCP config from .mcp.json in the working directory,
+# NOT from ~/.claude/settings.json.
 # AGENT_TOOLS is a comma-separated list: linear,sentry,langfuse,gcloud
 # ---------------------------------------------------------------------------
-SETTINGS_FILE="${HOME}/.claude/settings.json"
-mkdir -p "$(dirname "$SETTINGS_FILE")"
+MCP_FILE="/monorepo/.mcp.json"
 
 # Start building the mcpServers object
 MCP_SERVERS=""
@@ -95,9 +96,7 @@ for tool in "${TOOLS[@]}"; do
     sentry)
       MCP_SERVERS="${MCP_SERVERS}${MCP_SERVERS:+,}
     \"sentry\": {
-      \"command\": \"npx\",
-      \"args\": [\"-y\", \"@sentry/mcp-server@latest\"],
-      \"env\": { \"ANTHROPIC_API_KEY\": \"${ANTHROPIC_API_KEY:-}\" }
+      \"command\": \"sentry-mcp\"
     }"
       echo "  ✓ MCP: sentry"
       ;;
@@ -134,36 +133,13 @@ for tool in "${TOOLS[@]}"; do
   esac
 done
 
-# Preserve existing permissions from host settings if present
-EXISTING_PERMISSIONS=""
-if [[ -f "$SETTINGS_FILE" ]]; then
-  EXISTING_PERMISSIONS=$(python3 -c "
-import json, sys
-try:
-  d = json.load(open('$SETTINGS_FILE'))
-  p = d.get('permissions')
-  if p: print(json.dumps(p))
-except: pass
-" 2>/dev/null || true)
-fi
-
-if [[ -n "$EXISTING_PERMISSIONS" ]]; then
-  cat > "$SETTINGS_FILE" <<SETTINGS_EOF
-{
-  "permissions": ${EXISTING_PERMISSIONS},
-  "mcpServers": {${MCP_SERVERS}
-  }
-}
-SETTINGS_EOF
-else
-  cat > "$SETTINGS_FILE" <<SETTINGS_EOF
+cat > "$MCP_FILE" <<MCP_EOF
 {
   "mcpServers": {${MCP_SERVERS}
   }
 }
-SETTINGS_EOF
-fi
-echo "→ Generated settings.json with tools: ${AGENT_TOOLS:-none}"
+MCP_EOF
+echo "→ Generated .mcp.json with tools: ${AGENT_TOOLS:-none}"
 
 # ---------------------------------------------------------------------------
 # Strip YAML frontmatter from agent file → /tmp/agent-prompt.md

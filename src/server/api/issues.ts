@@ -175,9 +175,9 @@ function buildDockerArgs(project: Project, identifier: string, sessionId: string
     "-v", `${home}/.ssh:/home/agent/.ssh:ro`,
     "-v", `${home}/.config/gh:/home/agent/.config/gh:ro`,
     "-v", `${home}/.claude:/home/agent/.claude`,
-    // Override settings.json with runner's MCP config (the ~/.claude mount overwrites the Docker image's copy)
-    "-v", `${path.resolve("claude-settings.json")}:/home/agent/.claude/settings.json:ro`,
     "-v", `${home}/.claude.json:/home/agent/.claude.json`,
+    // Mount MCP config into the working directory (Claude Code reads .mcp.json from cwd)
+    "-v", `${path.resolve("claude-settings.json")}:/monorepo/.mcp.json:ro`,
     // Sentry MCP auth state
     ...(fs.existsSync(`${home}/.sentry`) ? ["-v", `${home}/.sentry:/home/agent/.sentry:ro`] : []),
     image,

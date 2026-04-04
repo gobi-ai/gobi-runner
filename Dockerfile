@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     jq \
+    gnupg \
     openssh-client \
     ca-certificates \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
