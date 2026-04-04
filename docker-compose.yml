@@ -1,0 +1,23 @@
+services:
+  agent:
+    build: .
+    container_name: agent-${AGENT}-${SESSION_ID}
+    environment:
+      AGENT: ${AGENT}
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
+      GITHUB_ORG: ${GITHUB_ORG:-gobi-ai}
+      SESSION_ID: ${SESSION_ID}
+      PERMISSION_MODE: ${PERMISSION_MODE:-bypassPermissions}
+      MODEL: ${MODEL:-}
+      AGENT_TOOLS: ${AGENT_TOOLS:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      - ../monorepo/.runner/agents:/agents:ro
+      - ../monorepo:/source:ro
+      - ~/.gitconfig:/root/.gitconfig:ro
+      - ~/.git-credentials:/root/.git-credentials:ro
+      - ~/.ssh:/root/.ssh:ro
+      - ~/.claude:/root/.claude
+      - ~/.sentry:/home/agent/.sentry:ro

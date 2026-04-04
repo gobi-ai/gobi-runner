@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "id": "monorepo",
+      "name": "Monorepo",
+      "targetDir": "/home/you/monorepo",
+      "dockerImage": "gobi-runner:latest"
+    }
+  ]
+}
