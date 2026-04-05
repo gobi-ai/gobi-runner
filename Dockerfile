@@ -50,16 +50,16 @@ RUN --mount=type=secret,id=gh_token \
       mkdir -p /monorepo && chown agent:agent /monorepo; \
     fi
 
+# Langfuse skill plugin (for langfuse-cli based data access)
+RUN git clone --depth=1 https://github.com/langfuse/skills.git /plugins/langfuse \
+    && mv /plugins/langfuse/.cursor-plugin /plugins/langfuse/.claude-plugin
+
 # Switch to non-root for everything else
 USER agent
 
 # Git identity
 RUN git config --global user.email "agent@joingobi.com" && \
     git config --global user.name "Gobi Agent"
-
-# Langfuse skill plugin (for langfuse-cli based data access)
-RUN git clone --depth=1 https://github.com/langfuse/skills.git /plugins/langfuse \
-    && mv /plugins/langfuse/.cursor-plugin /plugins/langfuse/.claude-plugin
 
 # Entrypoint
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
