@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI + MCP servers (linear, sentry, langfuse)
-RUN npm install -g @anthropic-ai/claude-code mcp-linear @sentry/mcp-server langfuse-mcp-server
+# Install Claude Code CLI + MCP servers + Langfuse CLI
+RUN npm install -g @anthropic-ai/claude-code mcp-linear @sentry/mcp-server langfuse-cli
 
 # Install Google Cloud SDK (for gcloud, gsutil, kubectl)
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
@@ -56,6 +56,10 @@ USER agent
 # Git identity
 RUN git config --global user.email "agent@joingobi.com" && \
     git config --global user.name "Gobi Agent"
+
+# Langfuse skill plugin (for langfuse-cli based data access)
+RUN git clone --depth=1 https://github.com/langfuse/skills.git /plugins/langfuse \
+    && mv /plugins/langfuse/.cursor-plugin /plugins/langfuse/.claude-plugin
 
 # Entrypoint
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
