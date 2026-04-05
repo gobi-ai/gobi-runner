@@ -631,6 +631,12 @@ export default function AgentList({ project }: Props) {
     refresh();
   }, [refresh]);
 
+  // Fallback poll: catch state changes if SSE misses them
+  useEffect(() => {
+    const interval = setInterval(refresh, 10_000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
   // SSE for state changes
   useEffect(() => {
     const evtSource = new EventSource(

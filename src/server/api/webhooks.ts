@@ -22,6 +22,7 @@ interface LinearWebhookPayload {
     description?: string;
     state?: { name: string; type: string };
     team?: { key: string; name: string };
+    project?: { name: string; id: string };
     labels?: { nodes: { name: string }[] };
     priority?: number;
     priorityLabel?: string;
@@ -85,6 +86,14 @@ function matchesTrigger(
     if (!hasLabel) return false;
   }
 
+  // Check project filter
+  if (trigger.projects && trigger.projects.length > 0) {
+    const projectName = payload.data.project?.name;
+    if (!projectName || !trigger.projects.some(
+      (p) => p.toLowerCase() === projectName.toLowerCase()
+    )) return false;
+  }
+
   return true;
 }
 
@@ -136,7 +145,7 @@ router.post("/linear", (req: Request, res: Response) => {
 
   const payload = req.body as LinearWebhookPayload;
 
-  console.log(`[webhook/linear] Received: type=${payload.type} action=${payload.action} issue=${payload.data.identifier ?? payload.data.id} state=${payload.data.state?.name ?? "n/a"}`);
+  console.log(`[webhook/linear] Received: type=${payload.type} action=${payload.action} issue=${payload.data.identifier ?? payload.data.id} state=${payload.data.state?.name ?? "n/a"} project=${payload.data.project?.name ?? "n/a"}`);
 
   // Refresh issue cache for any Issue event (create, update, remove)
   if (payload.type === "Issue") {

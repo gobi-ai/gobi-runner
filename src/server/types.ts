@@ -22,6 +22,8 @@ export interface LinearWebhookTrigger {
   teams?: string[];
   /** Optional: only fire for these label names */
   labels?: string[];
+  /** Optional: only fire for issues in these Linear project names (e.g. ["Gobi Monorepo"]) */
+  projects?: string[];
 }
 
 export type AgentTrigger = CronTrigger | LinearWebhookTrigger;

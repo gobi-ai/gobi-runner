@@ -79,6 +79,7 @@ MCP_FILE="/monorepo/.mcp.json"
 
 # Start building the mcpServers object
 MCP_SERVERS=""
+LANGFUSE_PLUGIN=""
 
 IFS=',' read -ra TOOLS <<< "${AGENT_TOOLS:-}"
 for tool in "${TOOLS[@]}"; do
@@ -101,23 +102,21 @@ for tool in "${TOOLS[@]}"; do
       echo "  ✓ MCP: sentry"
       ;;
     langfuse)
-      MCP_SERVERS="${MCP_SERVERS}${MCP_SERVERS:+,}
-    \"langfuse\": {
-      \"command\": \"npx\",
-      \"args\": [\"-y\", \"langfuse-mcp-server\"],
-      \"env\": {
-        \"LANGFUSE_PUBLIC_KEY\": \"${LANGFUSE_PUBLIC_KEY:-}\",
-        \"LANGFUSE_SECRET_KEY\": \"${LANGFUSE_SECRET_KEY:-}\",
-        \"LANGFUSE_HOST\": \"${LANGFUSE_HOST:-https://cloud.langfuse.com}\"
-      }
-    }"
-      echo "  ✓ MCP: langfuse"
+      # Langfuse uses a Claude Code skill + langfuse-cli (not MCP)
+      export LANGFUSE_PUBLIC_KEY="${LANGFUSE_PUBLIC_KEY:-}"
+      export LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
+      export LANGFUSE_HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+      LANGFUSE_PLUGIN="--plugin-dir /plugins/langfuse"
+      echo "  ✓ Langfuse skill + CLI"
       ;;
     gcloud)
-      # Activate service account if key file is mounted
-      SA_KEY="/home/agent/.config/gcloud/service-account.json"
-      if [[ -f "$SA_KEY" ]]; then
-        gcloud auth activate-service-account --key-file="$SA_KEY" --quiet 2>/dev/null && \
+      # gcloud needs a writable config dir; the mount at ~/.config/gcloud is read-only
+      SA_MOUNT="/home/agent/.config/gcloud/service-account.json"
+      export CLOUDSDK_CONFIG=/tmp/gcloud-config
+      mkdir -p "$CLOUDSDK_CONFIG"
+      if [[ -f "$SA_MOUNT" ]]; then
+        cp "$SA_MOUNT" "$CLOUDSDK_CONFIG/service-account.json"
+        gcloud auth activate-service-account --key-file="$CLOUDSDK_CONFIG/service-account.json" --quiet 2>/dev/null && \
           echo "  ✓ gcloud: service account activated" || \
           echo "  ⚠ gcloud: service account activation failed"
       else
@@ -186,6 +185,11 @@ CLAUDE_ARGS=(
 
 if [[ -n "${MODEL:-}" ]]; then
   CLAUDE_ARGS+=(--model "$MODEL")
+fi
+
+# Add Langfuse plugin if enabled
+if [[ -n "${LANGFUSE_PLUGIN:-}" ]]; then
+  CLAUDE_ARGS+=($LANGFUSE_PLUGIN)
 fi
 
 # ---------------------------------------------------------------------------

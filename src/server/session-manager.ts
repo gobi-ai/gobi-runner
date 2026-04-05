@@ -90,7 +90,7 @@ function buildDockerArgs(
     "-v", `${home}/.claude.json:/home/agent/.claude.json`,
     // Sentry MCP auth state — cached OAuth tokens for @sentry/mcp-server
     ...(fs.existsSync(`${home}/.sentry`) ? ["-v", `${home}/.sentry:/home/agent/.sentry:ro`] : []),
-    // GCP service account key for gcloud (read-only investigator SA)
+    // GCP service account key for gcloud (entrypoint handles activation)
     ...(fs.existsSync(`${home}/.config/gcloud/service-account.json`) ? ["-v", `${home}/.config/gcloud/service-account.json:/home/agent/.config/gcloud/service-account.json:ro`] : []),
     image,
   ];
