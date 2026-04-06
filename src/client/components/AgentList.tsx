@@ -689,6 +689,12 @@ export default function AgentList({ project }: Props) {
   const issueInst: Instance[] = issueSessions
     .map((s) => ({ kind: "issue" as const, id: s.agentId, agentId: s.agentId, name: s.identifier, identifier: s.identifier, busy: s.busy }));
 
+  // Sort running instances by start time, newest first
+  agentInst.sort((a, b) => {
+    const ta = a.kind === "agent" && a.startedAt ? new Date(a.startedAt).getTime() : 0;
+    const tb = b.kind === "agent" && b.startedAt ? new Date(b.startedAt).getTime() : 0;
+    return tb - ta;
+  });
   const instances: Instance[] = [...issueInst, ...agentInst];
   const enabled = agents.filter((a) => a.enabled);
   const disabled = agents.filter((a) => !a.enabled);
