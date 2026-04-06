@@ -655,30 +655,29 @@ export default function AgentList({ project }: Props) {
 
   // Unified instances: agent runs (one per active session) + issue chat sessions
   type Instance =
-    | { kind: "agent"; id: string; agentId: string; sessionId?: string; name: string; status: string }
+    | { kind: "agent"; id: string; agentId: string; sessionId?: string; name: string; hashSuffix?: string; status: string }
     | { kind: "issue"; id: string; agentId: string; name: string; identifier: string; busy: boolean };
 
   const agentInst: Instance[] = [];
   for (const a of agents) {
     if (a.state.status !== "running") continue;
     const sessions = a.state.activeSessions || [];
-    if (sessions.length > 1) {
-      for (const s of sessions) {
-        agentInst.push({
-          kind: "agent" as const,
-          id: `${a.id}:${s.sessionId}`,
-          agentId: a.id,
-          sessionId: s.sessionId,
-          name: `${a.name} #${s.sessionId.slice(0, 6)}`,
-          status: a.state.status,
-        });
-      }
-    } else {
+    for (const s of sessions) {
+      agentInst.push({
+        kind: "agent" as const,
+        id: `${a.id}:${s.sessionId}`,
+        agentId: a.id,
+        sessionId: s.sessionId,
+        name: a.name,
+        hashSuffix: s.sessionId.slice(0, 6),
+        status: a.state.status,
+      });
+    }
+    if (sessions.length === 0) {
       agentInst.push({
         kind: "agent" as const,
         id: a.id,
         agentId: a.id,
-        sessionId: sessions[0]?.sessionId,
         name: a.name,
         status: a.state.status,
       });
@@ -738,7 +737,9 @@ export default function AgentList({ project }: Props) {
                         }}
                       >
                         <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#00AC47", flexShrink: 0 }} />
-                        <span style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{inst.name}</span>
+                        <span style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                          {inst.name}{inst.kind === "agent" && inst.hashSuffix && <span style={{ color: "var(--fg-muted)", fontWeight: 400 }}> #{inst.hashSuffix}</span>}
+                        </span>
                         {inst.kind === "agent" && (
                           <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>agent</span>
                         )}
@@ -774,7 +775,7 @@ export default function AgentList({ project }: Props) {
                         <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: statusColor, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                           <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {exec.agentName}
+                            {exec.agentName} <span style={{ color: "var(--fg-muted)", fontWeight: 400 }}>#{exec.sessionId.slice(0, 6)}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", gap: 6 }}>
                             {exec.linearIdentifier && (
