@@ -48,12 +48,26 @@ export interface AgentConfig extends AgentFrontmatter {
   triggerContext?: string;
   /** Host directory containing downloaded issue attachments (images) */
   attachmentsDir?: string;
+  /** Linear issue identifier (e.g. "ENG-123") when triggered from a webhook */
+  linearIdentifier?: string;
 }
 
 export interface SessionRun {
   sessionId: string;
   pid: number | null;
   startedAt: string;
+  linearIdentifier?: string;
+}
+
+export interface ExecutionRecord {
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  startedAt: string;
+  finishedAt: string;
+  status: "completed" | "errored" | "stopped";
+  linearIdentifier?: string;
+  costUsd?: number;
 }
 
 export interface AgentState {

@@ -4,6 +4,7 @@ import path from "path";
 import type { RunnerConfig, AgentWithState, AgentFrontmatter } from "../types.js";
 import { loadAllAgents, loadAgent, saveAgent, deleteAgentFile } from "../agent-loader.js";
 import { getAgentState, updateAgentState, defaultAgentState, addStateClient, removeStateClient } from "../state-store.js";
+import { loadExecutions } from "../execution-store.js";
 import { executeAgent, stopAgent } from "../session-manager.js";
 import { scheduleAgent, unscheduleAgent } from "../scheduler.js";
 
@@ -226,6 +227,13 @@ router.post("/:pid/agents/:aid/trigger", (req: Request, res: Response) => {
 router.post("/:pid/agents/:aid/stop", (req: Request, res: Response) => {
   const stopped = stopAgent(req.params.pid, req.params.aid);
   res.json({ ok: stopped });
+});
+
+// GET /api/projects/:pid/executions — execution history across all agents, newest first
+router.get("/:pid/executions", (req: Request, res: Response) => {
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+  const records = loadExecutions(req.params.pid);
+  res.json(records.slice(0, limit));
 });
 
 export default router;

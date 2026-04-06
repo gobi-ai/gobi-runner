@@ -244,6 +244,7 @@ router.post("/linear", async (req: Request, res: Response) => {
           ...agent,
           triggerContext,
           attachmentsDir: projectAttachmentsDir || undefined,
+          linearIdentifier: payload.data.identifier,
         };
         executeAgent(project, agentWithContext);
 

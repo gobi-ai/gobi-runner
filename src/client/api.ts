@@ -67,6 +67,17 @@ export interface LogEntry {
   sessionId?: string;
 }
 
+export interface ExecutionRecord {
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  startedAt: string;
+  finishedAt: string;
+  status: "completed" | "errored" | "stopped";
+  linearIdentifier?: string;
+  costUsd?: number;
+}
+
 export interface Domain {
   id: string;
   content: string;
@@ -102,6 +113,8 @@ export const api = {
     request(`/projects/${pid}/agents/${aid}/stop`, { method: "POST" }),
   getLogs: (pid: string, aid: string, tail = 100, sessionId?: string) =>
     request<LogEntry[]>(`/projects/${pid}/agents/${aid}/logs?tail=${tail}${sessionId ? `&session=${sessionId}` : ""}`),
+  getExecutions: (pid: string, limit = 50) =>
+    request<ExecutionRecord[]>(`/projects/${pid}/executions?limit=${limit}`),
 
   getDomains: (pid: string) => request<Domain[]>(`/projects/${pid}/domains`),
   getDomain: (pid: string, did: string) =>

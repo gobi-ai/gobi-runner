@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { AgentConfig, AgentState, Project } from "./types.js";
 import { updateAgentState, getAgentState, loadProjectState, saveProjectState } from "./state-store.js";
 import { appendLog, emitLogEvent, setActiveSession, clearActiveSession } from "./api/logs.js";
+import { appendExecution } from "./execution-store.js";
 
 // Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
@@ -145,7 +146,7 @@ export function startNewSession(
 
   // Add to activeSessions array
   const current = getAgentState(project.id, agent.id);
-  const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString() };
+  const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString(), linearIdentifier: agent.linearIdentifier };
   updateAgentState(project.id, agent.id, {
     lastRunAt: new Date().toISOString(),
     sessionId,
@@ -154,6 +155,8 @@ export function startNewSession(
     error: undefined,
     activeSessions: [...(current.activeSessions || []), newSession],
   });
+
+  let sessionCostUsd = 0;
 
   child.stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
@@ -172,6 +175,7 @@ export function startNewSession(
           }
         } else if (parsed.type === "result") {
           const runCost = parsed.cost_usd ?? 0;
+          sessionCostUsd += runCost;
           log("info", `Session completed. Cost: $${Number(runCost).toFixed(6)}`);
           if (runCost > 0) {
             const current = getAgentState(project.id, agent.id);
@@ -198,9 +202,22 @@ export function startNewSession(
     log("system", `--- SESSION FINISHED (${status}) ---`);
     clearActiveSession(project.id, agent.id, sessionId);
 
-    // Remove this session from activeSessions
+    // Remove this session from activeSessions and record in execution history
     const latest = getAgentState(project.id, agent.id);
+    const finishedSession = (latest.activeSessions || []).find((s) => s.sessionId === sessionId);
     const remaining = (latest.activeSessions || []).filter((s) => s.sessionId !== sessionId);
+
+    appendExecution(project.id, {
+      sessionId,
+      agentId: agent.id,
+      agentName: agent.name,
+      startedAt: finishedSession?.startedAt || newSession.startedAt,
+      finishedAt: new Date().toISOString(),
+      status,
+      linearIdentifier: finishedSession?.linearIdentifier || agent.linearIdentifier,
+      costUsd: sessionCostUsd || undefined,
+    });
+
     updateAgentState(project.id, agent.id, {
       status: remaining.length > 0 ? "running" : status,
       pid: remaining.length > 0 ? remaining[remaining.length - 1].pid : null,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import cronstrue from "cronstrue";
-import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project } from "../api";
+import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type ExecutionRecord, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project } from "../api";
 import LogViewer from "./LogViewer";
 import IssueList from "./IssueList";
 
@@ -11,6 +11,17 @@ const LINEAR_STATUSES = [
 
 interface Props {
   project: Project;
+}
+
+function formatTimeAgo(iso: string): string {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 function describeCron(expr: string): string {
@@ -576,41 +587,22 @@ export default function AgentList({ project }: Props) {
   const [issueSessions, setIssueSessions] = useState<IssueSession[]>([]);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [issuePickerAgent, setIssuePickerAgent] = useState<string | null>(null);
-  const [activeRunningTab, setActiveRunningTab] = useState<string | null>(null);
-  const [fullscreenLogAgent, setFullscreenLogAgent] = useState<string | null>(null);
-  const [runningLayout, setRunningLayout] = useState<"tabs" | "1" | "2" | "3" | "4">(() =>
-    (localStorage.getItem("runner_layout") as any) || "tabs"
-  );
-  const [dismissedInstances, setDismissedInstances] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem(`dismissed_${project.id}`);
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch { return new Set(); }
-  });
+  const [fullscreenLog, setFullscreenLog] = useState<{ agentId: string; sessionId?: string; label: string } | null>(null);
+  // Selected item in the sidebar: instance or execution history entry
+  const [selectedPanel, setSelectedPanel] = useState<{
+    kind: "instance"; id: string; agentId: string; sessionId?: string; label: string; issueIdentifier?: string;
+  } | {
+    kind: "execution"; agentId: string; sessionId: string; label: string;
+  } | null>(null);
+  const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [issueChatInput, setIssueChatInput] = useState<Record<string, string>>({});
   const [issueChatSending, setIssueChatSending] = useState<Set<string>>(new Set());
   const [issueRefreshTrigger, setIssueRefreshTrigger] = useState(0);
 
-  // Persist dismissed set to localStorage
-  useEffect(() => {
-    localStorage.setItem(`dismissed_${project.id}`, JSON.stringify([...dismissedInstances]));
-  }, [dismissedInstances, project.id]);
-
   const refresh = useCallback(() => {
-    api.getAgents(project.id).then((agents) => {
-      setAgents(agents);
-      const runningIds = agents.filter((a) => a.state.status === "running").map((a) => a.id);
-      if (runningIds.length > 0) {
-        setDismissedInstances((prev) => {
-          const hasAny = runningIds.some((id) => prev.has(id));
-          if (!hasAny) return prev;
-          const next = new Set(prev);
-          runningIds.forEach((id) => next.delete(id));
-          return next;
-        });
-      }
-    });
+    api.getAgents(project.id).then(setAgents);
     api.getIssueSessions(project.id).then(setIssueSessions).catch(() => {});
+    api.getExecutions(project.id).then(setExecutions).catch(() => {});
   }, [project.id]);
 
   const sendIssueChat = async (identifier: string) => {
@@ -646,31 +638,20 @@ export default function AgentList({ project }: Props) {
       try {
         const data = JSON.parse(event.data);
         if (data.agentId && data.state) {
-          // Un-dismiss when a new session starts (clear both agent-level and session-level dismissals)
-          if (data.state.status === "running") {
-            setDismissedInstances((prev) => {
-              const toRemove = [...prev].filter((id) => id === data.agentId || id.startsWith(data.agentId + ":"));
-              if (toRemove.length === 0) return prev;
-              const next = new Set(prev);
-              toRemove.forEach((id) => next.delete(id));
-              return next;
-            });
-          }
           setAgents((prev) =>
             prev.map((a) =>
               a.id === data.agentId ? { ...a, state: data.state as AgentState } : a
             )
           );
+          // Refresh execution history when a session finishes
+          if (data.state.status !== "running" && data.state.status !== "idle") {
+            api.getExecutions(project.id).then(setExecutions).catch(() => {});
+          }
         }
       } catch {}
     };
     return () => evtSource.close();
   }, [project.id]);
-
-  const dismissInstance = (agentId: string) => {
-    setDismissedInstances((prev) => new Set(prev).add(agentId));
-  };
-
 
   // Unified instances: agent runs (one per active session) + issue chat sessions
   type Instance =
@@ -679,24 +660,20 @@ export default function AgentList({ project }: Props) {
 
   const agentInst: Instance[] = [];
   for (const a of agents) {
-    if (a.state.status === "idle") continue;
+    if (a.state.status !== "running") continue;
     const sessions = a.state.activeSessions || [];
     if (sessions.length > 1) {
-      // Multiple concurrent sessions — create one instance per session
       for (const s of sessions) {
-        const instId = `${a.id}:${s.sessionId}`;
-        if (dismissedInstances.has(instId)) continue;
         agentInst.push({
           kind: "agent" as const,
-          id: instId,
+          id: `${a.id}:${s.sessionId}`,
           agentId: a.id,
           sessionId: s.sessionId,
           name: `${a.name} #${s.sessionId.slice(0, 6)}`,
           status: a.state.status,
         });
       }
-    } else if (!dismissedInstances.has(a.id)) {
-      // Single session or completed — show as before
+    } else {
       agentInst.push({
         kind: "agent" as const,
         id: a.id,
@@ -709,152 +686,161 @@ export default function AgentList({ project }: Props) {
   }
 
   const issueInst: Instance[] = issueSessions
-    .filter((s) => !dismissedInstances.has(s.agentId))
     .map((s) => ({ kind: "issue" as const, id: s.agentId, agentId: s.agentId, name: s.identifier, identifier: s.identifier, busy: s.busy }));
 
   const instances: Instance[] = [...issueInst, ...agentInst];
   const enabled = agents.filter((a) => a.enabled);
   const disabled = agents.filter((a) => !a.enabled);
 
+  // Auto-select first running instance if nothing selected
+  const autoSelected = selectedPanel
+    || (instances.length > 0
+      ? { kind: "instance" as const, id: instances[0].id, agentId: instances[0].agentId, sessionId: instances[0].kind === "agent" ? instances[0].sessionId : undefined, label: instances[0].name, issueIdentifier: instances[0].kind === "issue" ? instances[0].identifier : undefined }
+      : null);
+
+  const stopInstance = async (inst: Instance) => {
+    if (inst.kind === "agent") {
+      await api.stopAgent(project.id, inst.agentId);
+    } else {
+      await api.stopIssue(project.id, inst.identifier);
+      setIssueRefreshTrigger((n) => n + 1);
+    }
+    refresh();
+  };
+
+  const hasSidebarContent = instances.length > 0 || executions.length > 0;
+
   return (
     <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
-      {/* Instances */}
-      {instances.length > 0 && (() => {
-        const selectedId = activeRunningTab && instances.find((a) => a.id === activeRunningTab)
-          ? activeRunningTab
-          : instances[0].id;
-        const selected = instances.find((a) => a.id === selectedId)!;
-
-        const isAlive = (inst: Instance) => inst.kind === "agent" ? inst.status === "running" : true;
-
-        const layoutOptions: { value: typeof runningLayout; label: string }[] = [
-          { value: "tabs", label: "Tabs" },
-          { value: "1", label: "1 col" },
-          { value: "2", label: "2 col" },
-          { value: "3", label: "3 col" },
-          { value: "4", label: "4 col" },
-        ];
-
-        const stopInstance = async (inst: Instance) => {
-          if (inst.kind === "agent") {
-            await api.stopAgent(project.id, inst.agentId);
-          } else {
-            await api.stopIssue(project.id, inst.identifier);
-            setIssueRefreshTrigger((n) => n + 1);
-          }
-          refresh();
-        };
-
-        const renderChatInput = (inst: Instance) => {
-          if (inst.kind !== "issue") return null;
-          return (
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input
-                type="text"
-                value={issueChatInput[inst.identifier] || ""}
-                onChange={(e) => setIssueChatInput((prev) => ({ ...prev, [inst.identifier]: e.target.value }))}
-                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendIssueChat(inst.identifier)}
-                placeholder={issueChatSending.has(inst.identifier) ? "Sending..." : "Type a message..."}
-                disabled={issueChatSending.has(inst.identifier)}
-                style={{ flex: 1, padding: "6px 10px", background: "var(--bg-base)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", color: "var(--fg-default)", fontSize: 13, fontFamily: "var(--font-primary)" }}
-              />
-              <button onClick={() => sendIssueChat(inst.identifier)} disabled={issueChatSending.has(inst.identifier)} style={btnSmallPrimary}>Send</button>
-            </div>
-          );
-        };
-
-        return (
-          <>
-            <div style={{ ...sectionHeader, marginBottom: 12 }}>
-              <span style={sectionDot("#00AC47")} />
-              Instances ({instances.length})
-              <select
-                value={runningLayout}
-                onChange={(e) => { const v = e.target.value as typeof runningLayout; setRunningLayout(v); localStorage.setItem("runner_layout", v); }}
-                style={layoutSelect}
-              >
-                {layoutOptions.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {runningLayout === "tabs" ? (
-              <div style={runningPanel}>
-                <div style={tabBar}>
+      {/* Two-panel: sidebar (instances + history) | log viewer */}
+      {hasSidebarContent && (
+        <div style={{ display: "flex", gap: 16, marginBottom: 24, minHeight: 400, maxHeight: "calc(100vh - 200px)" }}>
+          {/* Left sidebar */}
+          <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-lg)" }}>
+            <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
+              {/* Running Instances */}
+              {instances.length > 0 && (
+                <>
+                  <div style={{ ...sidebarSectionLabel, marginTop: 4 }}>
+                    <span style={sectionDot("#00AC47")} />
+                    Running ({instances.length})
+                  </div>
                   {instances.map((inst) => {
-                    const isActive = inst.id === selectedId;
-                    const alive = isAlive(inst);
+                    const isSelected = autoSelected?.kind === "instance" && autoSelected.id === inst.id;
                     return (
-                      <div key={inst.id} style={{ display: "flex", alignItems: "center", borderBottom: isActive ? "2px solid var(--semantic-success)" : "2px solid transparent" }}>
-                        <button
-                          onClick={() => setActiveRunningTab(inst.id)}
-                          style={isActive ? tabActive : tabStyle}
-                        >
-                          <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: alive ? "#00AC47" : "#7D7A75", marginRight: 6 }} />
-                          {inst.name}
-                        </button>
-                        {!alive && (
-                          <button onClick={() => dismissInstance(inst.id)} style={{ ...iconBtn, fontSize: 14, padding: "4px 2px" }} title="Dismiss">&times;</button>
+                      <div
+                        key={inst.id}
+                        onClick={() => setSelectedPanel({ kind: "instance", id: inst.id, agentId: inst.agentId, sessionId: inst.kind === "agent" ? inst.sessionId : undefined, label: inst.name, issueIdentifier: inst.kind === "issue" ? inst.identifier : undefined })}
+                        style={{
+                          ...sidebarRow,
+                          background: isSelected ? "var(--semantic-info-tint)" : "transparent",
+                          border: isSelected ? "1px solid var(--semantic-info)" : "1px solid transparent",
+                        }}
+                      >
+                        <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#00AC47", flexShrink: 0 }} />
+                        <span style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{inst.name}</span>
+                        {inst.kind === "agent" && (
+                          <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>agent</span>
+                        )}
+                        {inst.kind === "issue" && (
+                          <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>chat</span>
                         )}
                       </div>
                     );
                   })}
-                </div>
-                <div style={tabContent}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <span style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>{selected.name}</span>
-                    <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>({selected.kind === "agent" ? selected.status : "chat"})</span>
-                    {isAlive(selected) ? (
-                      <button onClick={() => stopInstance(selected)} style={btnSmallDanger}>Stop</button>
-                    ) : (
-                      <button onClick={() => dismissInstance(selected.id)} style={btnSmallSecondary}>Dismiss</button>
-                    )}
-                    <button onClick={() => setFullscreenLogAgent(selected.id)} style={btnSmallSecondary}>Expand</button>
+                </>
+              )}
+
+              {/* Execution History */}
+              {executions.length > 0 && (
+                <>
+                  <div style={{ ...sidebarSectionLabel, marginTop: instances.length > 0 ? 12 : 4 }}>
+                    <span style={sectionDot("#7D7A75")} />
+                    History ({executions.length})
                   </div>
+                  {executions.map((exec) => {
+                    const isSelected = autoSelected?.kind === "execution" && autoSelected.sessionId === exec.sessionId;
+                    const statusColor = exec.status === "completed" ? "#00AC47" : exec.status === "errored" ? "var(--semantic-error)" : "var(--fg-muted)";
+                    return (
+                      <div
+                        key={exec.sessionId}
+                        onClick={() => setSelectedPanel({ kind: "execution", agentId: exec.agentId, sessionId: exec.sessionId, label: `${exec.agentName}${exec.linearIdentifier ? ` — ${exec.linearIdentifier}` : ""}` })}
+                        style={{
+                          ...sidebarRow,
+                          background: isSelected ? "var(--semantic-info-tint)" : "transparent",
+                          border: isSelected ? "1px solid var(--semantic-info)" : "1px solid transparent",
+                        }}
+                      >
+                        <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: statusColor, flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {exec.agentName}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", gap: 6 }}>
+                            {exec.linearIdentifier && (
+                              <span style={{ fontWeight: 600, color: "var(--semantic-info)", fontFamily: "monospace" }}>{exec.linearIdentifier}</span>
+                            )}
+                            <span>{formatTimeAgo(exec.startedAt)}</span>
+                            {exec.costUsd != null && exec.costUsd > 0 && (
+                              <span>${exec.costUsd.toFixed(4)}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Right panel: log viewer */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+            {autoSelected ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: "1px solid var(--border-default)", flexShrink: 0 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{autoSelected.label}</span>
+                  {autoSelected.kind === "instance" && (
+                    <>
+                      <button onClick={() => {
+                        const inst = instances.find((i) => i.id === autoSelected.id);
+                        if (inst) stopInstance(inst);
+                      }} style={btnSmallDanger}>Stop</button>
+                    </>
+                  )}
+                  <button onClick={() => setFullscreenLog({ agentId: autoSelected.agentId, sessionId: autoSelected.kind === "instance" ? autoSelected.sessionId : autoSelected.sessionId, label: autoSelected.label })} style={btnSmallSecondary}>Expand</button>
+                </div>
+                {/* Issue chat input */}
+                {autoSelected.kind === "instance" && autoSelected.issueIdentifier && (
+                  <div style={{ display: "flex", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border-default)" }}>
+                    <input
+                      type="text"
+                      value={issueChatInput[autoSelected.issueIdentifier] || ""}
+                      onChange={(e) => setIssueChatInput((prev) => ({ ...prev, [autoSelected.issueIdentifier!]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendIssueChat(autoSelected.issueIdentifier!)}
+                      placeholder={issueChatSending.has(autoSelected.issueIdentifier) ? "Sending..." : "Type a message..."}
+                      disabled={issueChatSending.has(autoSelected.issueIdentifier)}
+                      style={{ flex: 1, padding: "6px 10px", background: "var(--bg-base)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", color: "var(--fg-default)", fontSize: 13, fontFamily: "var(--font-primary)" }}
+                    />
+                    <button onClick={() => sendIssueChat(autoSelected.issueIdentifier!)} disabled={issueChatSending.has(autoSelected.issueIdentifier)} style={btnSmallPrimary}>Send</button>
+                  </div>
+                )}
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
                   <LogViewer
                     projectId={project.id}
-                    agentId={selected.agentId}
-                    sessionId={selected.kind === "agent" ? selected.sessionId : undefined}
-                    preview
+                    agentId={autoSelected.agentId}
+                    sessionId={autoSelected.kind === "instance" ? autoSelected.sessionId : autoSelected.sessionId}
                   />
-                  {renderChatInput(selected)}
                 </div>
-              </div>
+              </>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${runningLayout}, minmax(0, 1fr))`, gap: 12, marginBottom: 24 }}>
-                {instances.map((inst) => {
-                  const alive = isAlive(inst);
-                  return (
-                    <div key={inst.id} style={{ ...cardStyle, display: "flex", flexDirection: "column" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                        <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: alive ? "#00AC47" : "#7D7A75" }} />
-                        <span style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>{inst.name}</span>
-                        <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>({inst.kind === "agent" ? inst.status : "chat"})</span>
-                        {alive ? (
-                          <button onClick={() => stopInstance(inst)} style={btnSmallDanger}>Stop</button>
-                        ) : (
-                          <button onClick={() => dismissInstance(inst.id)} style={{ ...iconBtn, fontSize: 16 }} title="Dismiss">&times;</button>
-                        )}
-                        <button onClick={() => setFullscreenLogAgent(inst.id)} style={btnSmallSecondary}>Expand</button>
-                      </div>
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-                        <LogViewer
-                          projectId={project.id}
-                          agentId={inst.agentId}
-                          sessionId={inst.kind === "agent" ? inst.sessionId : undefined}
-                          preview
-                        />
-                        {renderChatInput(inst)}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-muted)", fontSize: 13 }}>
+                Select an instance or execution to view logs
               </div>
             )}
-          </>
-        );
-      })()}
+          </div>
+        </div>
+      )}
 
       {/* Enabled Agents */}
       {enabled.length > 0 && (
@@ -870,7 +856,7 @@ export default function AgentList({ project }: Props) {
                 <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                   <TriggerBadges agent={agent} />
                 </div>
-                <button onClick={() => setFullscreenLogAgent(agent.id)} style={iconBtn} title="Logs">
+                <button onClick={() => setFullscreenLog({ agentId: agent.id, label: agent.name })} style={iconBtn} title="Logs">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                     <polyline points="14 2 14 8 20 8"/>
@@ -906,7 +892,7 @@ export default function AgentList({ project }: Props) {
                 <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                   <TriggerBadges agent={agent} />
                 </div>
-                <button onClick={() => setFullscreenLogAgent(agent.id)} style={iconBtn} title="Logs">
+                <button onClick={() => setFullscreenLog({ agentId: agent.id, label: agent.name })} style={iconBtn} title="Logs">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                     <polyline points="14 2 14 8 20 8"/>
@@ -934,35 +920,24 @@ export default function AgentList({ project }: Props) {
       </div>
 
       {/* Fullscreen log overlay */}
-      {fullscreenLogAgent && (() => {
-        // fullscreenLogAgent can be "agentId" or "agentId:sessionId"
-        const inst = instances.find((i) => i.id === fullscreenLogAgent);
-        const agentId = inst ? inst.agentId : fullscreenLogAgent;
-        const fsSessionId = inst?.kind === "agent" ? inst.sessionId : undefined;
-        const agent = agents.find((a) => a.id === agentId);
-        if (!agent) return null;
-        return (
-          <div style={overlay} onMouseDown={() => setFullscreenLogAgent(null)}>
-            <div style={logModal} onClick={(e) => e.stopPropagation()}>
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "12px 20px",
-                borderBottom: "1px solid var(--border-default)",
-                flexShrink: 0,
-              }}>
-                <span style={{ fontWeight: 600, fontSize: 15, flex: 1 }}>{inst ? inst.name : agent.name}</span>
-                {agent.state.status !== "idle" && agent.state.status !== "running" && (
-                  <span style={lastExecStyle}>({agent.state.status})</span>
-                )}
-                <button onClick={() => setFullscreenLogAgent(null)} style={iconBtn}>&times;</button>
-              </div>
-              <LogViewer projectId={project.id} agentId={agentId} sessionId={fsSessionId} />
+      {fullscreenLog && (
+        <div style={overlay} onMouseDown={() => setFullscreenLog(null)}>
+          <div style={logModal} onClick={(e) => e.stopPropagation()}>
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "12px 20px",
+              borderBottom: "1px solid var(--border-default)",
+              flexShrink: 0,
+            }}>
+              <span style={{ fontWeight: 600, fontSize: 15, flex: 1 }}>{fullscreenLog.label}</span>
+              <button onClick={() => setFullscreenLog(null)} style={iconBtn}>&times;</button>
             </div>
+            <LogViewer projectId={project.id} agentId={fullscreenLog.agentId} sessionId={fullscreenLog.sessionId} />
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* Issue picker for Run Now */}
       {issuePickerAgent && (
@@ -996,63 +971,27 @@ const lastExecStyle: React.CSSProperties = {
   fontWeight: 400,
 };
 
-const runningPanel: React.CSSProperties = {
-  background: "var(--bg-surface)",
-  border: "1px solid var(--border-default)",
-  borderRadius: "var(--radius-lg)",
-  overflow: "hidden",
-  marginBottom: 24,
-};
-
-const tabBar: React.CSSProperties = {
+const sidebarRow: React.CSSProperties = {
   display: "flex",
-  borderBottom: "1px solid var(--border-default)",
-  background: "var(--bg-base)",
-  overflow: "auto",
-};
-
-const layoutSelect: React.CSSProperties = {
-  marginLeft: "auto",
-  padding: "2px 8px",
-  background: "var(--bg-base)",
-  border: "1px solid var(--border-strong)",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 10px",
   borderRadius: "var(--radius-sm)",
-  color: "var(--fg-default)",
-  fontSize: 12,
-  fontFamily: "var(--font-primary)",
   cursor: "pointer",
-  textTransform: "none" as const,
-  letterSpacing: 0,
-  fontWeight: 400,
+  marginBottom: 2,
 };
 
-const tabStyle: React.CSSProperties = {
-  padding: "8px 16px",
-  background: "none",
-  border: "none",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontSize: 13,
-  fontFamily: "var(--font-primary)",
-  fontWeight: 500,
-  whiteSpace: "nowrap",
-};
-
-const tabActive: React.CSSProperties = {
-  ...tabStyle,
-  color: "var(--fg-default)",
+const sidebarSectionLabel: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 11,
   fontWeight: 600,
-};
-
-const tabContent: React.CSSProperties = {
-  padding: 16,
-};
-
-const cardGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(2, 1fr)",
-  gap: 12,
-  marginBottom: 24,
+  color: "var(--fg-muted)",
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  padding: "4px 10px",
+  marginBottom: 4,
 };
 
 const cardStyle: React.CSSProperties = {
