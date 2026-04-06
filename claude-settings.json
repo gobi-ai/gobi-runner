@@ -1,11 +1,9 @@
 {
   "mcpServers": {
-    "linear-server": {
-      "command": "npx",
-      "args": ["-y", "mcp-linear"],
-      "env": {
-        "LINEAR_API_KEY": "${LINEAR_API_KEY}"
-      }
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "headers": { "Authorization": "Bearer ${LINEAR_API_KEY}" }
     },
     "sentry": {
       "command": "sentry-mcp"

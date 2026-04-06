@@ -19,7 +19,7 @@ function parseToolCall(message: string): { tool: string; detail: string } | null
   return { tool: m[1], detail: m[2] };
 }
 
-/** Shorten MCP tool names: mcp__linear-server__save_comment → linear/save_comment */
+/** Shorten MCP tool names: mcp__linear__save_comment → linear/save_comment */
 function shortToolName(name: string): string {
   const mcp = name.match(/^mcp__(.+?)__(.+)$/);
   if (mcp) return `${mcp[1].replace(/-server$/, "")}/${mcp[2]}`;

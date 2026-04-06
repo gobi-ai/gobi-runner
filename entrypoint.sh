@@ -70,6 +70,12 @@ cp -rf /source/approvers  /monorepo/approvers  2>/dev/null || true
 cp -rf /source/actors     /monorepo/actors     2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# Clear stale MCP auth cache — prevents Claude from skipping MCP servers
+# that previously failed to connect (e.g. due to missing env vars)
+# ---------------------------------------------------------------------------
+rm -f "${HOME}/.claude/mcp-needs-auth-cache.json"
+
+# ---------------------------------------------------------------------------
 # Generate /monorepo/.mcp.json based on AGENT_TOOLS env var
 # Claude Code reads MCP config from .mcp.json in the working directory,
 # NOT from ~/.claude/settings.json.
@@ -87,10 +93,10 @@ for tool in "${TOOLS[@]}"; do
   case "$tool" in
     linear)
       MCP_SERVERS="${MCP_SERVERS}${MCP_SERVERS:+,}
-    \"linear-server\": {
-      \"command\": \"npx\",
-      \"args\": [\"-y\", \"mcp-linear\"],
-      \"env\": { \"LINEAR_API_KEY\": \"${LINEAR_API_KEY}\" }
+    \"linear\": {
+      \"type\": \"http\",
+      \"url\": \"https://mcp.linear.app/mcp\",
+      \"headers\": { \"Authorization\": \"Bearer ${LINEAR_API_KEY}\" }
     }"
       echo "  ✓ MCP: linear"
       ;;
