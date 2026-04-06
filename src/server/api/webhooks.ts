@@ -296,7 +296,7 @@ router.post("/github", async (req: Request, res: Response) => {
     return;
   }
 
-  // Parse Linear issue identifier from PR body (e.g. https://linear.app/gobi/issue/GOBI-42/...)
+  // Parse Linear issue identifier from PR body (e.g. https://linear.app/my-org/issue/ENG-42/...)
   const prBody: string = payload.pull_request.body || "";
   const match = prBody.match(/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/i);
   if (!match) {
@@ -304,7 +304,7 @@ router.post("/github", async (req: Request, res: Response) => {
     return;
   }
 
-  const identifier = match[1].toUpperCase(); // e.g. "GOBI-200"
+  const identifier = match[1].toUpperCase(); // e.g. "ENG-200"
   const apiKey = process.env.LINEAR_API_KEY;
   if (!apiKey) {
     res.status(500).json({ error: "LINEAR_API_KEY not set" });

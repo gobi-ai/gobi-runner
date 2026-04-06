@@ -5,7 +5,7 @@ set -euo pipefail
 # Required env vars
 # AGENT              - agent name: planner | plan-reviewer | developer | glasses-investigator
 # LINEAR_API_KEY     - Linear API key
-# GITHUB_ORG         - GitHub org (e.g. gobi-ai)
+# GITHUB_ORG         - GitHub org (e.g. my-org)
 # SESSION_ID         - Claude session ID (passed by runner)
 # PERMISSION_MODE    - Claude permission mode (default: bypassPermissions)
 # MODEL              - Claude model override (optional)
@@ -53,7 +53,7 @@ fi
 # Pull latest on all repos (shallow clone — use fetch + reset)
 # ---------------------------------------------------------------------------
 echo "→ Pulling latest..."
-for repo_dir in /monorepo/gobi-*/; do
+for repo_dir in /monorepo/*/; do
   repo=$(basename "$repo_dir")
   branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "develop")
   git -C "$repo_dir" fetch origin --quiet 2>/dev/null && \

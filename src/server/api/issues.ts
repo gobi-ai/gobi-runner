@@ -159,14 +159,14 @@ function getIssueSession(projectId: string, identifier: string): { running: bool
 }
 
 function buildDockerArgs(project: Project, identifier: string, sessionId: string, containerName: string, entrypoint?: string): string[] {
-  const image = project.dockerImage ?? "gobi-runner:latest";
+  const image = project.dockerImage ?? "agent-runner:latest";
   const home = process.env.HOME ?? "/root";
   return [
     "run", "--rm",
     "--entrypoint", entrypoint ?? "bash",
     "--name", containerName,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
-    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? "gobi-ai"}`,
+    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? ""}`,
     "-e", `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ?? ""}`,
     "-v", `${project.targetDir}:/source:ro`,
     "-v", `${project.targetDir}/.runner/agents:/agents:ro`,
@@ -187,13 +187,13 @@ function buildDockerArgs(project: Project, identifier: string, sessionId: string
 function buildSetupScript(identifier: string): string {
   const branch = identifier.toLowerCase();
   return [
-    `for repo_dir in /monorepo/gobi-*/; do repo=$(basename "$repo_dir"); b=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "develop"); git -C "$repo_dir" fetch origin --quiet 2>/dev/null && git -C "$repo_dir" reset --hard "origin/$b" --quiet 2>/dev/null; done`,
+    `for repo_dir in /monorepo/*/; do repo=$(basename "$repo_dir"); b=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "develop"); git -C "$repo_dir" fetch origin --quiet 2>/dev/null && git -C "$repo_dir" reset --hard "origin/$b" --quiet 2>/dev/null; done`,
     `cp -f /source/CLAUDE.md /monorepo/CLAUDE.md 2>/dev/null || true`,
     `cp -f /source/LINEAR.md /monorepo/LINEAR.md 2>/dev/null || true`,
     `cp -rf /source/approvers /monorepo/approvers 2>/dev/null || true`,
     `cp -rf /source/actors /monorepo/actors 2>/dev/null || true`,
     `cp -rf /source/.runner/domains /monorepo/.runner/domains 2>/dev/null || true`,
-    `for repo_dir in /monorepo/gobi-*/; do`,
+    `for repo_dir in /monorepo/*/; do`,
     `  cd "$repo_dir"`,
     `  if git ls-remote --exit-code --heads origin '${branch}' >/dev/null 2>&1; then`,
     `    git checkout '${branch}' 2>/dev/null || git checkout -b '${branch}' 'origin/${branch}' 2>/dev/null`,

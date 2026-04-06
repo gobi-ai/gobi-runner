@@ -5,7 +5,7 @@ services:
     environment:
       AGENT: ${AGENT}
       LINEAR_API_KEY: ${LINEAR_API_KEY}
-      GITHUB_ORG: ${GITHUB_ORG:-gobi-ai}
+      GITHUB_ORG: ${GITHUB_ORG}
       SESSION_ID: ${SESSION_ID}
       PERMISSION_MODE: ${PERMISSION_MODE:-bypassPermissions}
       MODEL: ${MODEL:-}

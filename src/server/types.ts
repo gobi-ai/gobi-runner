@@ -22,7 +22,7 @@ export interface LinearWebhookTrigger {
   teams?: string[];
   /** Optional: only fire for these label names */
   labels?: string[];
-  /** Optional: only fire for issues in these Linear project names (e.g. ["Gobi Monorepo"]) */
+  /** Optional: only fire for issues in these Linear project names (e.g. ["My Project"]) */
   projects?: string[];
 }
 
@@ -56,6 +56,7 @@ export interface SessionRun {
   sessionId: string;
   pid: number | null;
   startedAt: string;
+  agentName?: string;
   linearIdentifier?: string;
 }
 

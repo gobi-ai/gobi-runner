@@ -73,7 +73,7 @@ function buildDockerArgs(
   agent: AgentConfig,
   sessionId: string
 ): string[] {
-  const image = project.dockerImage ?? "gobi-runner:latest";
+  const image = project.dockerImage ?? "agent-runner:latest";
   const home = process.env.HOME ?? "/root";
   return [
     "run", "--rm",
@@ -84,7 +84,7 @@ function buildDockerArgs(
     "-e", `MODEL=${agent.model ?? ""}`,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
     "-e", `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ?? ""}`,
-    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? "gobi-ai"}`,
+    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? ""}`,
     "-e", `AGENT_TOOLS=${(agent.tools ?? []).join(",")}`,
     // Langfuse credentials (only used when tools includes "langfuse")
     "-e", `LANGFUSE_PUBLIC_KEY=${process.env.LANGFUSE_PUBLIC_KEY ?? ""}`,
@@ -156,7 +156,7 @@ export function startNewSession(
 
   // Add to activeSessions array
   const current = getAgentState(project.id, agent.id);
-  const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString(), linearIdentifier: agent.linearIdentifier };
+  const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString(), agentName: agent.name, linearIdentifier: agent.linearIdentifier };
   updateAgentState(project.id, agent.id, {
     lastRunAt: new Date().toISOString(),
     sessionId,
@@ -315,7 +315,7 @@ export function reconcileStates(
             appendExecution(project.id, {
               sessionId: sess.sessionId,
               agentId,
-              agentName: agentId,
+              agentName: sess.agentName || agentId,
               startedAt: sess.startedAt,
               finishedAt: new Date().toISOString(),
               status: "stopped",
