@@ -655,7 +655,7 @@ export default function AgentList({ project }: Props) {
 
   // Unified instances: agent runs (one per active session) + issue chat sessions
   type Instance =
-    | { kind: "agent"; id: string; agentId: string; sessionId?: string; name: string; hashSuffix?: string; status: string }
+    | { kind: "agent"; id: string; agentId: string; sessionId?: string; name: string; hashSuffix?: string; status: string; linearIdentifier?: string; startedAt?: string }
     | { kind: "issue"; id: string; agentId: string; name: string; identifier: string; busy: boolean };
 
   const agentInst: Instance[] = [];
@@ -671,6 +671,8 @@ export default function AgentList({ project }: Props) {
         name: a.name,
         hashSuffix: s.sessionId.slice(0, 6),
         status: a.state.status,
+        linearIdentifier: s.linearIdentifier,
+        startedAt: s.startedAt,
       });
     }
     if (sessions.length === 0) {
@@ -736,16 +738,23 @@ export default function AgentList({ project }: Props) {
                           border: isSelected ? "1px solid var(--semantic-info)" : "1px solid transparent",
                         }}
                       >
-                        <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#00AC47", flexShrink: 0 }} />
-                        <span style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                          {inst.name}{inst.kind === "agent" && inst.hashSuffix && <span style={{ color: "var(--fg-muted)", fontWeight: 400 }}> #{inst.hashSuffix}</span>}
-                        </span>
-                        {inst.kind === "agent" && (
-                          <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>agent</span>
-                        )}
-                        {inst.kind === "issue" && (
-                          <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>chat</span>
-                        )}
+                        <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#00AC47", flexShrink: 0, marginTop: 4 }} />
+                        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {inst.name}{inst.kind === "agent" && inst.hashSuffix && <span style={{ color: "var(--fg-muted)", fontWeight: 400 }}> #{inst.hashSuffix}</span>}
+                          </div>
+                          {inst.kind === "agent" && (inst.linearIdentifier || inst.startedAt) && (
+                            <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", gap: 6 }}>
+                              {inst.linearIdentifier && (
+                                <span style={{ fontWeight: 600, color: "var(--semantic-info)", fontFamily: "monospace" }}>{inst.linearIdentifier}</span>
+                              )}
+                              {inst.startedAt && <span>{formatTimeAgo(inst.startedAt)}</span>}
+                            </div>
+                          )}
+                          {inst.kind === "issue" && (
+                            <div style={{ fontSize: 11, color: "var(--fg-muted)" }}>chat</div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

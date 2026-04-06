@@ -22,6 +22,7 @@ export interface SessionRun {
   sessionId: string;
   pid: number | null;
   startedAt: string;
+  linearIdentifier?: string;
 }
 
 export interface AgentState {
