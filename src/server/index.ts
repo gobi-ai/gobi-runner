@@ -8,7 +8,7 @@ import path from "path";
 import type { RunnerConfig } from "./types.js";
 import { loadAllAgents } from "./agent-loader.js";
 import { scheduleAgent } from "./scheduler.js";
-import { loadProjectState, saveProjectState } from "./state-store.js";
+import { reconcileStates } from "./session-manager.js";
 import projectsRouter from "./api/projects.js";
 import agentsRouter from "./api/agents.js";
 import logsRouter from "./api/logs.js";
@@ -96,24 +96,15 @@ function startup() {
 
   const config: RunnerConfig = JSON.parse(fs.readFileSync(runnerPath, "utf-8"));
 
-  for (const project of config.projects) {
-    // Reconcile: mark dead PIDs as stopped
-    const state = loadProjectState(project.id);
-    let changed = false;
-    for (const [agentId, agentState] of Object.entries(state)) {
-      if (agentState.pid && agentState.status === "running") {
-        try {
-          process.kill(agentState.pid, 0);
-        } catch {
-          agentState.status = "stopped";
-          agentState.pid = null;
-          changed = true;
-        }
-      }
-    }
-    if (changed) saveProjectState(project.id, state);
+  // Reconcile stale sessions (checks Docker containers)
+  reconcileStates(config.projects);
 
-    // Schedule enabled agents
+  // Re-reconcile periodically (every 30s) to catch containers that died
+  setInterval(() => {
+    try { reconcileStates(config.projects); } catch {}
+  }, 30_000);
+
+  for (const project of config.projects) {
     const agents = loadAllAgents(project.id);
     for (const agent of agents) {
       if (agent.enabled) {

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, execSync, type ChildProcess } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -53,6 +53,16 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function isContainerRunning(agentId: string, sessionId: string): boolean {
+  const name = `agent-${agentId}-${sessionId}`;
+  try {
+    const out = execSync(`docker inspect -f '{{.State.Running}}' ${name} 2>/dev/null`, { encoding: "utf-8" }).trim();
+    return out === "true";
   } catch {
     return false;
   }
@@ -291,11 +301,29 @@ export function reconcileStates(
   for (const project of projects) {
     const state = loadProjectState(project.id);
     let changed = false;
-    for (const [_agentId, agentState] of Object.entries(state)) {
+    for (const [agentId, agentState] of Object.entries(state)) {
       const s = agentState as AgentState;
-      // Reconcile activeSessions — remove dead ones
       if (s.activeSessions && s.activeSessions.length > 0) {
-        const alive = s.activeSessions.filter((sess) => sess.pid && isProcessAlive(sess.pid));
+        const alive: typeof s.activeSessions = [];
+        for (const sess of s.activeSessions) {
+          const hasProcess = sess.pid && isProcessAlive(sess.pid);
+          const hasContainer = isContainerRunning(agentId, sess.sessionId);
+          if (hasProcess || hasContainer) {
+            alive.push(sess);
+          } else {
+            // Session is dead — record in execution history
+            appendExecution(project.id, {
+              sessionId: sess.sessionId,
+              agentId,
+              agentName: agentId,
+              startedAt: sess.startedAt,
+              finishedAt: new Date().toISOString(),
+              status: "stopped",
+              linearIdentifier: sess.linearIdentifier,
+            });
+            clearActiveSession(project.id, agentId, sess.sessionId);
+          }
+        }
         if (alive.length !== s.activeSessions.length) {
           s.activeSessions = alive;
           if (alive.length === 0) {
