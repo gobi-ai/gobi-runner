@@ -18,6 +18,12 @@ export interface Project {
   targetDir: string;
 }
 
+export interface SessionRun {
+  sessionId: string;
+  pid: number | null;
+  startedAt: string;
+}
+
 export interface AgentState {
   lastRunAt: string | null;
   sessionId: string | null;
@@ -25,6 +31,7 @@ export interface AgentState {
   status: string;
   totalCostUsd: number;
   error?: string;
+  activeSessions: SessionRun[];
 }
 
 export interface CronTrigger {
@@ -57,6 +64,7 @@ export interface LogEntry {
   timestamp: string;
   type: string;
   message: string;
+  sessionId?: string;
 }
 
 export interface Domain {
@@ -92,8 +100,8 @@ export const api = {
     }),
   stopAgent: (pid: string, aid: string) =>
     request(`/projects/${pid}/agents/${aid}/stop`, { method: "POST" }),
-  getLogs: (pid: string, aid: string, tail = 100) =>
-    request<LogEntry[]>(`/projects/${pid}/agents/${aid}/logs?tail=${tail}`),
+  getLogs: (pid: string, aid: string, tail = 100, sessionId?: string) =>
+    request<LogEntry[]>(`/projects/${pid}/agents/${aid}/logs?tail=${tail}${sessionId ? `&session=${sessionId}` : ""}`),
 
   getDomains: (pid: string) => request<Domain[]>(`/projects/${pid}/domains`),
   getDomain: (pid: string, did: string) =>

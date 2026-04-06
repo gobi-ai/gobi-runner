@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server/index.ts",
     "dev:client": "vite",
     "build": "vite build",
-    "docker:build": "GH_TOKEN=$(gh auth token) DOCKER_BUILDKIT=1 docker build --secret id=gh_token,env=GH_TOKEN -t gobi-runner:latest .",
+    "docker:build": "GH_TOKEN=$(gh auth token) DOCKER_BUILDKIT=1 docker build --build-arg CACHE_BUST=$(date +%s) --secret id=gh_token,env=GH_TOKEN -t gobi-runner:latest .",
     "start": "tsx src/server/index.ts"
   },
   "dependencies": {

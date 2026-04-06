@@ -31,6 +31,7 @@ RUN userdel node && useradd -m -u 1000 -s /bin/bash agent
 # Build with: docker build -t gobi-runner:latest .
 # GH_TOKEN is read automatically from `gh auth token` via the secret mount
 ARG GITHUB_ORG=gobi-ai
+ARG CACHE_BUST
 RUN --mount=type=secret,id=gh_token \
     if GH_TOKEN=$(cat /run/secrets/gh_token 2>/dev/null); then \
       mkdir -p /monorepo && \
@@ -51,6 +52,7 @@ RUN --mount=type=secret,id=gh_token \
     fi
 
 # Langfuse skill plugin (for langfuse-cli based data access)
+# CACHE_BUST ARG declared above also busts this layer
 RUN git clone --depth=1 https://github.com/langfuse/skills.git /plugins/langfuse \
     && mv /plugins/langfuse/.cursor-plugin /plugins/langfuse/.claude-plugin
 

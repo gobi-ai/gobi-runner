@@ -37,6 +37,7 @@ export function defaultAgentState(): AgentState {
     pid: null,
     status: "idle",
     totalCostUsd: 0,
+    activeSessions: [],
   };
 }
 

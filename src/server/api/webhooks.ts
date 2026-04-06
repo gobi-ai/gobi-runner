@@ -7,6 +7,7 @@ import { loadAllAgents } from "../agent-loader.js";
 import { executeAgent } from "../session-manager.js";
 import { appendLog, emitLogEvent } from "./logs.js";
 import { onLinearWebhook, stopIssueChatSession } from "./issues.js";
+import { downloadIssueAttachments } from "../attachment-downloader.js";
 
 const router = Router();
 const RUNNER_JSON = path.join(process.cwd(), "runner.json");
@@ -128,7 +129,7 @@ function buildTriggerContext(payload: LinearWebhookPayload): string {
 }
 
 // POST /api/webhooks/linear
-router.post("/linear", (req: Request, res: Response) => {
+router.post("/linear", async (req: Request, res: Response) => {
   // Verify signature if webhook secret is configured
   const secret = process.env.LINEAR_WEBHOOK_SECRET;
   if (secret) {
@@ -183,10 +184,17 @@ router.post("/linear", (req: Request, res: Response) => {
   );
 
   const triggered: string[] = [];
-  const triggerContext = buildTriggerContext(payload);
+  let triggerContext = buildTriggerContext(payload);
+
+  // Download issue attachments (images from description + Linear attachments API)
+  // We do this once and share the result across all triggered agents
+  const issueDescription = payload.data.description;
+  const issueLinearId = payload.data.id; // Linear internal UUID
+  let attachmentsDir: string | undefined;
 
   for (const project of config.projects) {
     const agents = loadAllAgents(project.id);
+    let projectAttachmentsDir: string | undefined;
 
     for (const agent of agents) {
       if (!agent.enabled) continue;
@@ -195,6 +203,27 @@ router.post("/linear", (req: Request, res: Response) => {
       for (const trigger of agent.triggers) {
         if (trigger.type !== "linear-webhook") continue;
         if (!matchesTrigger(trigger, payload)) continue;
+
+        // Download attachments once per project on first matching agent
+        if (projectAttachmentsDir === undefined && issueDescription) {
+          try {
+            const result = await downloadIssueAttachments(
+              project.id,
+              `webhook-${payload.data.identifier ?? payload.data.id}`,
+              issueDescription,
+              issueLinearId
+            );
+            if (result) {
+              projectAttachmentsDir = result.dir;
+              triggerContext += `\n\n### Attachments\n\nIssue images have been downloaded to \`/tmp/attachments/\`. See \`/tmp/attachments/attachments.md\` for the full list.`;
+            } else {
+              projectAttachmentsDir = ""; // no attachments, don't retry
+            }
+          } catch (err) {
+            console.error("[webhook/linear] Failed to download attachments:", err);
+            projectAttachmentsDir = "";
+          }
+        }
 
         const log = (
           type: "info" | "system",
@@ -214,6 +243,7 @@ router.post("/linear", (req: Request, res: Response) => {
         const agentWithContext: AgentConfig = {
           ...agent,
           triggerContext,
+          attachmentsDir: projectAttachmentsDir || undefined,
         };
         executeAgent(project, agentWithContext);
 

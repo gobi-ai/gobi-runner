@@ -440,7 +440,7 @@ export function stopIssueChatSession(projectId: string, identifier: string): boo
     spawn("docker", ["rm", "-f", session.containerName], { stdio: "ignore" });
   }
   const agentId = `issue-${identifier.toLowerCase()}`;
-  clearActiveSession(projectId, agentId);
+  clearActiveSession(projectId, agentId, session.sessionId);
   issueSessions.delete(key);
   return true;
 }

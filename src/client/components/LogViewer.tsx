@@ -4,6 +4,8 @@ import { api, type LogEntry } from "../api";
 interface Props {
   projectId: string;
   agentId: string;
+  /** If provided, show logs for this specific session only */
+  sessionId?: string;
   /** Show as a height-limited preview with live updates */
   preview?: boolean;
   /** Called when preview is clicked */
@@ -170,27 +172,29 @@ function LogLine({ entry }: { entry: LogEntry }) {
   );
 }
 
-export default function LogViewer({ projectId, agentId, preview, onClick }: Props) {
+export default function LogViewer({ projectId, agentId, sessionId, preview, onClick }: Props) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
 
   // Load initial logs
   useEffect(() => {
-    api.getLogs(projectId, agentId, 200).then(setLogs);
-  }, [projectId, agentId]);
+    api.getLogs(projectId, agentId, 200, sessionId).then(setLogs);
+  }, [projectId, agentId, sessionId]);
 
-  // SSE live stream
+  // SSE live stream — connect to session-specific stream if sessionId provided
   useEffect(() => {
-    const evtSource = new EventSource(
-      `/api/logs/stream?projectId=${encodeURIComponent(projectId)}&agentId=${encodeURIComponent(agentId)}`
-    );
+    let url = `/api/logs/stream?projectId=${encodeURIComponent(projectId)}&agentId=${encodeURIComponent(agentId)}`;
+    if (sessionId) {
+      url += `&sessionId=${encodeURIComponent(sessionId)}`;
+    }
+    const evtSource = new EventSource(url);
     evtSource.onmessage = (event) => {
       try {
         const entry = JSON.parse(event.data) as LogEntry;
         if (entry.type === "system" && entry.message === "Connected to log stream") return;
-        // New session started — reset logs so we don't mix sessions
-        if (entry.type === "system" && entry.message.startsWith("Starting new session")) {
+        // New session started — reset logs so we don't mix sessions (only for non-session-specific viewers)
+        if (!sessionId && entry.type === "system" && entry.message.startsWith("Starting new session")) {
           setLogs([entry]);
           return;
         }
@@ -198,7 +202,7 @@ export default function LogViewer({ projectId, agentId, preview, onClick }: Prop
       } catch {}
     };
     return () => evtSource.close();
-  }, [projectId, agentId]);
+  }, [projectId, agentId, sessionId]);
 
   // Auto-scroll
   useEffect(() => {

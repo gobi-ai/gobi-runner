@@ -646,12 +646,13 @@ export default function AgentList({ project }: Props) {
       try {
         const data = JSON.parse(event.data);
         if (data.agentId && data.state) {
-          // Un-dismiss when a new session starts
+          // Un-dismiss when a new session starts (clear both agent-level and session-level dismissals)
           if (data.state.status === "running") {
             setDismissedInstances((prev) => {
-              if (!prev.has(data.agentId)) return prev;
+              const toRemove = [...prev].filter((id) => id === data.agentId || id.startsWith(data.agentId + ":"));
+              if (toRemove.length === 0) return prev;
               const next = new Set(prev);
-              next.delete(data.agentId);
+              toRemove.forEach((id) => next.delete(id));
               return next;
             });
           }
@@ -671,18 +672,45 @@ export default function AgentList({ project }: Props) {
   };
 
 
-  // Unified instances: agent runs + issue chat sessions
+  // Unified instances: agent runs (one per active session) + issue chat sessions
   type Instance =
-    | { kind: "agent"; id: string; name: string; status: string }
-    | { kind: "issue"; id: string; name: string; identifier: string; busy: boolean };
+    | { kind: "agent"; id: string; agentId: string; sessionId?: string; name: string; status: string }
+    | { kind: "issue"; id: string; agentId: string; name: string; identifier: string; busy: boolean };
 
-  const agentInst: Instance[] = agents
-    .filter((a) => a.state.status !== "idle" && !dismissedInstances.has(a.id))
-    .map((a) => ({ kind: "agent" as const, id: a.id, name: a.name, status: a.state.status }));
+  const agentInst: Instance[] = [];
+  for (const a of agents) {
+    if (a.state.status === "idle") continue;
+    const sessions = a.state.activeSessions || [];
+    if (sessions.length > 1) {
+      // Multiple concurrent sessions — create one instance per session
+      for (const s of sessions) {
+        const instId = `${a.id}:${s.sessionId}`;
+        if (dismissedInstances.has(instId)) continue;
+        agentInst.push({
+          kind: "agent" as const,
+          id: instId,
+          agentId: a.id,
+          sessionId: s.sessionId,
+          name: `${a.name} #${s.sessionId.slice(0, 6)}`,
+          status: a.state.status,
+        });
+      }
+    } else if (!dismissedInstances.has(a.id)) {
+      // Single session or completed — show as before
+      agentInst.push({
+        kind: "agent" as const,
+        id: a.id,
+        agentId: a.id,
+        sessionId: sessions[0]?.sessionId,
+        name: a.name,
+        status: a.state.status,
+      });
+    }
+  }
 
   const issueInst: Instance[] = issueSessions
     .filter((s) => !dismissedInstances.has(s.agentId))
-    .map((s) => ({ kind: "issue" as const, id: s.agentId, name: s.identifier, identifier: s.identifier, busy: s.busy }));
+    .map((s) => ({ kind: "issue" as const, id: s.agentId, agentId: s.agentId, name: s.identifier, identifier: s.identifier, busy: s.busy }));
 
   const instances: Instance[] = [...issueInst, ...agentInst];
   const enabled = agents.filter((a) => a.enabled);
@@ -709,7 +737,7 @@ export default function AgentList({ project }: Props) {
 
         const stopInstance = async (inst: Instance) => {
           if (inst.kind === "agent") {
-            await api.stopAgent(project.id, inst.id);
+            await api.stopAgent(project.id, inst.agentId);
           } else {
             await api.stopIssue(project.id, inst.identifier);
             setIssueRefreshTrigger((n) => n + 1);
@@ -786,7 +814,8 @@ export default function AgentList({ project }: Props) {
                   </div>
                   <LogViewer
                     projectId={project.id}
-                    agentId={selected.id}
+                    agentId={selected.agentId}
+                    sessionId={selected.kind === "agent" ? selected.sessionId : undefined}
                     preview
                   />
                   {renderChatInput(selected)}
@@ -812,7 +841,8 @@ export default function AgentList({ project }: Props) {
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
                         <LogViewer
                           projectId={project.id}
-                          agentId={inst.id}
+                          agentId={inst.agentId}
+                          sessionId={inst.kind === "agent" ? inst.sessionId : undefined}
                           preview
                         />
                         {renderChatInput(inst)}
@@ -905,7 +935,11 @@ export default function AgentList({ project }: Props) {
 
       {/* Fullscreen log overlay */}
       {fullscreenLogAgent && (() => {
-        const agent = agents.find((a) => a.id === fullscreenLogAgent);
+        // fullscreenLogAgent can be "agentId" or "agentId:sessionId"
+        const inst = instances.find((i) => i.id === fullscreenLogAgent);
+        const agentId = inst ? inst.agentId : fullscreenLogAgent;
+        const fsSessionId = inst?.kind === "agent" ? inst.sessionId : undefined;
+        const agent = agents.find((a) => a.id === agentId);
         if (!agent) return null;
         return (
           <div style={overlay} onMouseDown={() => setFullscreenLogAgent(null)}>
@@ -918,13 +952,13 @@ export default function AgentList({ project }: Props) {
                 borderBottom: "1px solid var(--border-default)",
                 flexShrink: 0,
               }}>
-                <span style={{ fontWeight: 600, fontSize: 15, flex: 1 }}>{agent.name}</span>
+                <span style={{ fontWeight: 600, fontSize: 15, flex: 1 }}>{inst ? inst.name : agent.name}</span>
                 {agent.state.status !== "idle" && agent.state.status !== "running" && (
                   <span style={lastExecStyle}>({agent.state.status})</span>
                 )}
                 <button onClick={() => setFullscreenLogAgent(null)} style={iconBtn}>&times;</button>
               </div>
-              <LogViewer projectId={project.id} agentId={agent.id} />
+              <LogViewer projectId={project.id} agentId={agentId} sessionId={fsSessionId} />
             </div>
           </div>
         );

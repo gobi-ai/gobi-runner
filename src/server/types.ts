@@ -46,6 +46,14 @@ export interface AgentConfig extends AgentFrontmatter {
   filePath: string;
   /** Extra context injected at trigger time (e.g. Linear issue payload) */
   triggerContext?: string;
+  /** Host directory containing downloaded issue attachments (images) */
+  attachmentsDir?: string;
+}
+
+export interface SessionRun {
+  sessionId: string;
+  pid: number | null;
+  startedAt: string;
 }
 
 export interface AgentState {
@@ -55,6 +63,8 @@ export interface AgentState {
   status: "idle" | "running" | "completed" | "stopped" | "errored" | "skipped";
   totalCostUsd: number;
   error?: string;
+  /** All currently running sessions for this agent (supports concurrent runs) */
+  activeSessions: SessionRun[];
 }
 
 export interface AgentWithState extends AgentConfig {
@@ -71,4 +81,5 @@ export interface LogEntry {
   projectId: string;
   type: "info" | "error" | "output" | "system";
   message: string;
+  sessionId?: string;
 }

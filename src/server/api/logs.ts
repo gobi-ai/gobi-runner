@@ -6,22 +6,44 @@ import { getRunnerDir } from "../project-resolver.js";
 
 const router = Router();
 
-// SSE clients indexed by "projectId:agentId"
+// SSE clients indexed by "projectId:agentId:sessionId"
 const sseClients = new Map<string, Set<Response>>();
 
 function logKey(projectId: string, agentId: string): string {
   return `${projectId}:${agentId}`;
 }
 
-// Active session ID per agent — set when a session starts, used for log file routing
-const activeSessionIds = new Map<string, string>();
-
-export function setActiveSession(projectId: string, agentId: string, sessionId: string): void {
-  activeSessionIds.set(logKey(projectId, agentId), sessionId);
+function sseKey(projectId: string, agentId: string, sessionId: string): string {
+  return `${projectId}:${agentId}:${sessionId}`;
 }
 
-export function clearActiveSession(projectId: string, agentId: string): void {
-  activeSessionIds.delete(logKey(projectId, agentId));
+// Active session IDs per agent — supports multiple concurrent sessions
+const activeSessionIds = new Map<string, Set<string>>();
+
+export function setActiveSession(projectId: string, agentId: string, sessionId: string): void {
+  const key = logKey(projectId, agentId);
+  if (!activeSessionIds.has(key)) {
+    activeSessionIds.set(key, new Set());
+  }
+  activeSessionIds.get(key)!.add(sessionId);
+}
+
+export function clearActiveSession(projectId: string, agentId: string, sessionId: string): void {
+  const key = logKey(projectId, agentId);
+  const sessions = activeSessionIds.get(key);
+  if (sessions) {
+    sessions.delete(sessionId);
+    if (sessions.size === 0) {
+      activeSessionIds.delete(key);
+    }
+  }
+}
+
+/** Get all active session IDs for an agent */
+export function getActiveSessions(projectId: string, agentId: string): string[] {
+  const key = logKey(projectId, agentId);
+  const sessions = activeSessionIds.get(key);
+  return sessions ? [...sessions] : [];
 }
 
 function logsDir(projectId: string): string {
@@ -36,8 +58,10 @@ function sessionLogPath(projectId: string, agentId: string, sessionId: string): 
 
 function activeLogPath(projectId: string, agentId: string): string | null {
   const key = logKey(projectId, agentId);
-  const sessionId = activeSessionIds.get(key);
-  if (!sessionId) return null;
+  const sessions = activeSessionIds.get(key);
+  if (!sessions || sessions.size === 0) return null;
+  // Return the most recently added session's log
+  const sessionId = [...sessions].pop()!;
   return sessionLogPath(projectId, agentId, sessionId);
 }
 
@@ -58,18 +82,35 @@ function listSessionLogs(projectId: string, agentId: string): string[] {
 export function appendLog(
   projectId: string,
   agentId: string,
-  type: LogEntry["type"],
-  message: string
+  sessionIdOrType: string,
+  typeOrMessage: LogEntry["type"] | string,
+  messageOrUndef?: string
 ): void {
+  // Support both (projectId, agentId, sessionId, type, message) and (projectId, agentId, type, message)
+  let sessionId: string | undefined;
+  let type: LogEntry["type"];
+  let message: string;
+  if (messageOrUndef !== undefined) {
+    sessionId = sessionIdOrType;
+    type = typeOrMessage as LogEntry["type"];
+    message = messageOrUndef;
+  } else {
+    type = sessionIdOrType as LogEntry["type"];
+    message = typeOrMessage;
+    // Use latest active session
+    const sessions = getActiveSessions(projectId, agentId);
+    sessionId = sessions.length > 0 ? sessions[sessions.length - 1] : undefined;
+  }
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
     agentId,
     projectId,
     type,
     message,
+    sessionId,
   };
-  const fp = activeLogPath(projectId, agentId);
-  if (fp) {
+  if (sessionId) {
+    const fp = sessionLogPath(projectId, agentId, sessionId);
     fs.appendFileSync(fp, JSON.stringify(entry) + "\n");
   }
 }
@@ -77,13 +118,40 @@ export function appendLog(
 export function emitLogEvent(
   projectId: string,
   agentId: string,
-  entry: LogEntry
+  sessionIdOrEntry: string | LogEntry,
+  entryOrUndef?: LogEntry
 ): void {
-  const key = logKey(projectId, agentId);
-  const clients = sseClients.get(key);
-  if (clients) {
+  let sessionId: string | undefined;
+  let entry: LogEntry;
+  if (entryOrUndef !== undefined) {
+    sessionId = sessionIdOrEntry as string;
+    entry = entryOrUndef;
+  } else {
+    entry = sessionIdOrEntry as LogEntry;
+    sessionId = entry.sessionId;
+    if (!sessionId) {
+      const sessions = getActiveSessions(projectId, agentId);
+      sessionId = sessions.length > 0 ? sessions[sessions.length - 1] : undefined;
+    }
+  }
+  // Emit to session-specific SSE clients
+  if (sessionId) {
+    const sk = sseKey(projectId, agentId, sessionId);
+    const sessionClients = sseClients.get(sk);
+    if (sessionClients) {
+      const data = JSON.stringify(entry);
+      for (const res of sessionClients) {
+        res.write(`data: ${data}\n\n`);
+      }
+    }
+  }
+
+  // Also emit to agent-level SSE clients (legacy / overview)
+  const ak = logKey(projectId, agentId);
+  const agentClients = sseClients.get(ak);
+  if (agentClients) {
     const data = JSON.stringify(entry);
-    for (const res of clients) {
+    for (const res of agentClients) {
       res.write(`data: ${data}\n\n`);
     }
   }
@@ -119,15 +187,19 @@ router.get("/projects/:pid/agents/:aid/logs", (req: Request, res: Response) => {
   res.json(entries);
 });
 
-// GET /api/logs/stream?projectId=X&agentId=Y — SSE live stream
+// GET /api/logs/stream?projectId=X&agentId=Y[&sessionId=Z] — SSE live stream
+// If sessionId is provided, only receive events for that session
 router.get("/logs/stream", (req: Request, res: Response) => {
-  const { projectId, agentId } = req.query;
+  const { projectId, agentId, sessionId } = req.query;
   if (!projectId || !agentId) {
     res.status(400).json({ error: "projectId and agentId required" });
     return;
   }
 
-  const key = logKey(projectId as string, agentId as string);
+  // Use session-specific key if sessionId provided, otherwise agent-level key
+  const key = sessionId
+    ? sseKey(projectId as string, agentId as string, sessionId as string)
+    : logKey(projectId as string, agentId as string);
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

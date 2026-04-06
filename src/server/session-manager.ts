@@ -7,7 +7,12 @@ import type { AgentConfig, AgentState, Project } from "./types.js";
 import { updateAgentState, getAgentState, loadProjectState, saveProjectState } from "./state-store.js";
 import { appendLog, emitLogEvent, setActiveSession, clearActiveSession } from "./api/logs.js";
 
+// Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
+
+function sessionKey(projectId: string, agentId: string, sessionId: string): string {
+  return `${projectId}:${agentId}:${sessionId}`;
+}
 
 function formatToolInput(name: string, input: Record<string, unknown>): string {
   // Show the most useful field(s) per tool
@@ -101,7 +106,7 @@ export function startNewSession(
   agent: AgentConfig
 ): void {
   const sessionId = uuidv4();
-  const key = processKey(project.id, agent.id);
+  const sKey = sessionKey(project.id, agent.id, sessionId);
 
   setActiveSession(project.id, agent.id, sessionId);
 
@@ -117,9 +122,15 @@ export function startNewSession(
     args.splice(imgIdx, 0, "-v", `${triggerFile}:/tmp/trigger-context.md:ro`);
   }
 
+  // If attachments were downloaded, mount the directory into the container
+  if (agent.attachmentsDir && fs.existsSync(agent.attachmentsDir)) {
+    const imgIdx = args.length - 1;
+    args.splice(imgIdx, 0, "-v", `${agent.attachmentsDir}:/tmp/attachments:ro`);
+  }
+
   const log = (type: "info" | "error" | "output" | "system", message: string) => {
-    appendLog(project.id, agent.id, type, message);
-    emitLogEvent(project.id, agent.id, { type, message, timestamp: new Date().toISOString(), agentId: agent.id, projectId: project.id });
+    appendLog(project.id, agent.id, sessionId, type, message);
+    emitLogEvent(project.id, agent.id, sessionId, { type, message, timestamp: new Date().toISOString(), agentId: agent.id, projectId: project.id, sessionId });
   };
 
   log("system", `Starting new session ${sessionId}`);
@@ -130,14 +141,18 @@ export function startNewSession(
     env: { ...process.env },
   });
 
-  activeProcesses.set(key, child);
+  activeProcesses.set(sKey, child);
 
+  // Add to activeSessions array
+  const current = getAgentState(project.id, agent.id);
+  const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString() };
   updateAgentState(project.id, agent.id, {
     lastRunAt: new Date().toISOString(),
     sessionId,
     pid: child.pid || null,
     status: "running",
     error: undefined,
+    activeSessions: [...(current.activeSessions || []), newSession],
   });
 
   child.stdout?.on("data", (data: Buffer) => {
@@ -176,62 +191,77 @@ export function startNewSession(
   });
 
   child.on("close", (code) => {
-    activeProcesses.delete(key);
+    activeProcesses.delete(sKey);
     if (triggerFile) try { fs.unlinkSync(triggerFile); } catch {}
     const status = code === 0 ? "completed" : "errored";
     log("system", `Process exited with code ${code}`);
     log("system", `--- SESSION FINISHED (${status}) ---`);
-    clearActiveSession(project.id, agent.id);
+    clearActiveSession(project.id, agent.id, sessionId);
+
+    // Remove this session from activeSessions
+    const latest = getAgentState(project.id, agent.id);
+    const remaining = (latest.activeSessions || []).filter((s) => s.sessionId !== sessionId);
     updateAgentState(project.id, agent.id, {
-      status,
-      pid: null,
-      error: code !== 0 ? `Exit code ${code}` : undefined,
+      status: remaining.length > 0 ? "running" : status,
+      pid: remaining.length > 0 ? remaining[remaining.length - 1].pid : null,
+      sessionId: remaining.length > 0 ? remaining[remaining.length - 1].sessionId : sessionId,
+      activeSessions: remaining,
+      error: code !== 0 && remaining.length === 0 ? `Exit code ${code}` : undefined,
     });
   });
 }
 
 export function executeAgent(project: Project, agent: AgentConfig): void {
-  const state = getAgentState(project.id, agent.id);
-
-  const log = (type: "info" | "error" | "output" | "system", message: string) => {
-    appendLog(project.id, agent.id, type, message);
-    emitLogEvent(project.id, agent.id, { type, message, timestamp: new Date().toISOString(), agentId: agent.id, projectId: project.id });
-  };
-
-  // If PID is alive, agent is already running — skip
-  if (state.pid && isProcessAlive(state.pid)) {
-    log("info", "Agent still running, skipping");
-    updateAgentState(project.id, agent.id, { status: "running" });
-    return;
-  }
-
-  // Otherwise always start a fresh session
+  // Always start a new session — multiple concurrent sessions are supported
   startNewSession(project, agent);
 }
 
-export function stopAgent(projectId: string, agentId: string): boolean {
-  const key = processKey(projectId, agentId);
-  const child = activeProcesses.get(key);
-  if (child) {
-    child.kill("SIGTERM");
-    activeProcesses.delete(key);
-    updateAgentState(projectId, agentId, { status: "stopped", pid: null });
-    return true;
-  }
-
-  // Fallback: kill by PID from state (e.g. after server restart lost the handle)
+export function stopAgent(projectId: string, agentId: string, targetSessionId?: string): boolean {
   const state = getAgentState(projectId, agentId);
-  if (state.pid && isProcessAlive(state.pid)) {
-    try {
-      process.kill(state.pid, "SIGTERM");
-    } catch { /* already dead */ }
-    updateAgentState(projectId, agentId, { status: "stopped", pid: null });
-    return true;
+  let stopped = false;
+
+  // Stop specific session or all sessions
+  const sessionsToStop = targetSessionId
+    ? (state.activeSessions || []).filter((s) => s.sessionId === targetSessionId)
+    : (state.activeSessions || []);
+
+  for (const session of sessionsToStop) {
+    const sKey = sessionKey(projectId, agentId, session.sessionId);
+    const child = activeProcesses.get(sKey);
+    if (child) {
+      child.kill("SIGTERM");
+      activeProcesses.delete(sKey);
+      stopped = true;
+    } else if (session.pid && isProcessAlive(session.pid)) {
+      try { process.kill(session.pid, "SIGTERM"); } catch { /* already dead */ }
+      stopped = true;
+    }
+    clearActiveSession(projectId, agentId, session.sessionId);
   }
 
-  // PID is dead but state is stale — just reset it
-  if (state.status === "running") {
-    updateAgentState(projectId, agentId, { status: "stopped", pid: null });
+  // Also try legacy single-PID fallback
+  if (!stopped && !targetSessionId) {
+    const legacyKey = processKey(projectId, agentId);
+    const child = activeProcesses.get(legacyKey);
+    if (child) {
+      child.kill("SIGTERM");
+      activeProcesses.delete(legacyKey);
+      stopped = true;
+    } else if (state.pid && isProcessAlive(state.pid)) {
+      try { process.kill(state.pid, "SIGTERM"); } catch { /* already dead */ }
+      stopped = true;
+    }
+  }
+
+  if (stopped || state.status === "running") {
+    const remaining = targetSessionId
+      ? (state.activeSessions || []).filter((s) => s.sessionId !== targetSessionId)
+      : [];
+    updateAgentState(projectId, agentId, {
+      status: remaining.length > 0 ? "running" : "stopped",
+      pid: remaining.length > 0 ? remaining[remaining.length - 1].pid : null,
+      activeSessions: remaining,
+    });
     return true;
   }
 
@@ -246,7 +276,18 @@ export function reconcileStates(
     let changed = false;
     for (const [_agentId, agentState] of Object.entries(state)) {
       const s = agentState as AgentState;
-      if (s.pid && s.status === "running" && !isProcessAlive(s.pid)) {
+      // Reconcile activeSessions — remove dead ones
+      if (s.activeSessions && s.activeSessions.length > 0) {
+        const alive = s.activeSessions.filter((sess) => sess.pid && isProcessAlive(sess.pid));
+        if (alive.length !== s.activeSessions.length) {
+          s.activeSessions = alive;
+          if (alive.length === 0) {
+            s.status = "stopped";
+            s.pid = null;
+          }
+          changed = true;
+        }
+      } else if (s.pid && s.status === "running" && !isProcessAlive(s.pid)) {
         s.status = "stopped";
         s.pid = null;
         changed = true;
