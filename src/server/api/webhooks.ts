@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import type { RunnerConfig, AgentConfig, LinearWebhookTrigger } from "../types.js";
 import { loadAllAgents } from "../agent-loader.js";
-import { executeAgent } from "../session-manager.js";
+import { enqueueForIssue } from "../issue-queue.js";
 import { appendLog, emitLogEvent } from "./logs.js";
 import { onLinearWebhook, stopIssueChatSession } from "./issues.js";
 import { downloadIssueAttachments } from "../attachment-downloader.js";
@@ -246,12 +246,20 @@ router.post("/linear", async (req: Request, res: Response) => {
           attachmentsDir: projectAttachmentsDir || undefined,
           linearIdentifier: payload.data.identifier,
         };
-        executeAgent(project, agentWithContext);
+        const issueId = payload.data.identifier ?? payload.data.id;
+        const result = enqueueForIssue(issueId, project, agentWithContext);
 
-        log(
-          "system",
-          `Linear webhook triggered: ${payload.data.identifier} moved to "${payload.data.state?.name}"`
-        );
+        if (result.started) {
+          log(
+            "system",
+            `Linear webhook triggered: ${issueId} moved to "${payload.data.state?.name}"`
+          );
+        } else {
+          log(
+            "system",
+            `Linear webhook queued: ${issueId} moved to "${payload.data.state?.name}" (agent already running${result.replaced ? `, replaced pending ${result.replaced}` : ""})`
+          );
+        }
         triggered.push(`${project.id}:${agent.id}`);
         break; // only trigger once per agent even if multiple triggers match
       }

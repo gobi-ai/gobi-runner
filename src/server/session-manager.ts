@@ -9,6 +9,7 @@ import { appendLog, emitLogEvent, setActiveSession, clearActiveSession } from ".
 import { appendExecution } from "./execution-store.js";
 import { getProvider } from "./providers/index.js";
 import { loadProjectConfig } from "./project-resolver.js";
+import { onIssueAgentComplete } from "./issue-queue.js";
 
 // Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
@@ -252,6 +253,11 @@ export function startNewSession(
       activeSessions: remaining,
       error: code !== 0 && remaining.length === 0 ? `Exit code ${code}` : undefined,
     });
+
+    // Notify issue queue so the next pending agent for this issue can start
+    if (agent.linearIdentifier) {
+      onIssueAgentComplete(agent.linearIdentifier);
+    }
   });
 }
 
