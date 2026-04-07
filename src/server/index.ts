@@ -15,6 +15,7 @@ import logsRouter from "./api/logs.js";
 import webhooksRouter from "./api/webhooks.js";
 import domainsRouter from "./api/domains.js";
 import issuesRouter from "./api/issues.js";
+import { listProviders } from "./providers/index.js";
 
 const app = express();
 const PORT = 3456;
@@ -56,6 +57,13 @@ if (RUNNER_PASSWORD) {
 }
 
 // API routes
+app.get("/api/providers", (_req, res) => {
+  res.json(listProviders().map((p) => ({
+    id: p.id,
+    displayName: p.displayName,
+    models: p.models,
+  })));
+});
 app.use("/api/projects", projectsRouter);
 app.use("/api/projects", agentsRouter);
 app.use("/api", logsRouter);

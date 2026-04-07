@@ -69,7 +69,7 @@ router.post("/:pid/agents", (req: Request, res: Response) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  const { id, name, schedule, enabled, permissionMode, model, prompt, triggers } = req.body;
+  const { id, name, schedule, enabled, provider, permissionMode, model, prompt, triggers } = req.body;
   if (!id || !prompt) {
     res.status(400).json({ error: "id and prompt are required" });
     return;
@@ -78,6 +78,7 @@ router.post("/:pid/agents", (req: Request, res: Response) => {
     name: name || id,
     schedule: schedule || "",
     enabled: enabled ?? false,
+    provider: provider || "claude",
     permissionMode: permissionMode || "default",
     model: model || "",
     triggers: triggers ?? [],
@@ -99,7 +100,7 @@ router.put("/:pid/agents/:aid", (req: Request, res: Response) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  const { name, schedule, enabled, permissionMode, model, prompt, triggers } = req.body;
+  const { name, schedule, enabled, provider, permissionMode, model, prompt, triggers } = req.body;
   // Preserve existing triggers if not provided in the request
   let resolvedTriggers = triggers;
   if (resolvedTriggers === undefined) {
@@ -114,6 +115,7 @@ router.put("/:pid/agents/:aid", (req: Request, res: Response) => {
     name: name || req.params.aid,
     schedule: schedule || "",
     enabled: enabled ?? false,
+    provider: provider || "claude",
     permissionMode: permissionMode || "default",
     model: model || "",
     triggers: resolvedTriggers,

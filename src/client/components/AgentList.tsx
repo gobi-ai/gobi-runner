@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import cronstrue from "cronstrue";
-import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type ExecutionRecord, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project } from "../api";
+import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type ExecutionRecord, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project, type ProviderInfo } from "../api";
 import LogViewer from "./LogViewer";
 import IssueList from "./IssueList";
 
@@ -38,12 +38,18 @@ function EditModal({ project, agent, onClose, onSaved }: {
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState(agent.provider ?? "claude");
   const [form, setForm] = useState({
     name: agent.name,
     model: agent.model,
     permissionMode: agent.permissionMode,
     prompt: agent.prompt,
   });
+
+  useEffect(() => {
+    api.getProviders().then(setProviders).catch(() => {});
+  }, []);
   const [triggers, setTriggers] = useState<AgentTrigger[]>(() => {
     const existing = agent.triggers ?? [];
     // Migrate legacy schedule field into a cron trigger if no cron triggers exist
@@ -94,6 +100,7 @@ function EditModal({ project, agent, onClose, onSaved }: {
   const handleSave = async () => {
     await api.updateAgent(project.id, agent.id, {
       ...form,
+      provider: selectedProvider,
       triggers,
       enabled: agent.enabled,
     });
@@ -115,18 +122,23 @@ function EditModal({ project, agent, onClose, onSaved }: {
           <h3 style={{ fontSize: 16, fontWeight: 600 }}>Edit {agent.name}</h3>
           <button onClick={onClose} style={iconBtn}>&times;</button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
           <label style={labelStyle}>
             Name
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
           </label>
           <label style={labelStyle}>
+            Provider
+            <select value={selectedProvider} onChange={(e) => { setSelectedProvider(e.target.value); setForm({ ...form, model: "" }); }} style={inputStyle}>
+              {providers.map((p) => <option key={p.id} value={p.id}>{p.displayName}</option>)}
+            </select>
+          </label>
+          <label style={labelStyle}>
             Model
             <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} style={inputStyle}>
-              <option value="">Default</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus</option>
-              <option value="haiku">Haiku</option>
+              {(providers.find((p) => p.id === selectedProvider)?.models ?? []).map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
             </select>
           </label>
           <label style={labelStyle}>
@@ -257,6 +269,7 @@ function TriggerBadges({ agent }: { agent: Agent }) {
           webhook: {((t as LinearWebhookTrigger).statusTo ?? []).join(", ") || "any"}
         </span>
       ))}
+      {agent.provider && agent.provider !== "claude" && <span>{agent.provider}</span>}
       {agent.model && <span>{agent.model}</span>}
       {agent.state.totalCostUsd > 0 && (
         <span>${agent.state.totalCostUsd.toFixed(4)}</span>

@@ -21,6 +21,7 @@ export function loadAgent(projectId: string, filename: string): AgentConfig {
     schedule: frontmatter.schedule || "",
     enabled: frontmatter.enabled ?? false,
     permissionMode: frontmatter.permissionMode || "default",
+    provider: frontmatter.provider || "claude",
     model: frontmatter.model || "",
     tools: frontmatter.tools ?? [],
     triggers: frontmatter.triggers ?? [],

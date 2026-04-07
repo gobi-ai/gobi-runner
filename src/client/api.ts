@@ -54,11 +54,18 @@ export interface Agent {
   name: string;
   schedule?: string;
   enabled: boolean;
+  provider?: string;
   permissionMode: string;
   model: string;
   prompt: string;
   triggers: AgentTrigger[];
   state: AgentState;
+}
+
+export interface ProviderInfo {
+  id: string;
+  displayName: string;
+  models: { id: string; label: string }[];
 }
 
 export interface LogEntry {
@@ -85,6 +92,7 @@ export interface Domain {
 }
 
 export const api = {
+  getProviders: () => request<ProviderInfo[]>("/providers"),
   getProjects: () => request<Project[]>("/projects"),
   createProject: (p: Project) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(p) }),
