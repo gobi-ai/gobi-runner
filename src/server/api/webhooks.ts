@@ -164,6 +164,14 @@ router.post("/linear", async (req: Request, res: Response) => {
     return;
   }
 
+  // Only trigger on actual status changes, not other field updates.
+  // Linear always includes data.state (current state) on Issue updates,
+  // but updatedFrom.state is only present when the state field changed.
+  if (payload.action === "update" && !payload.updatedFrom?.state) {
+    res.json({ ok: true, matched: 0, reason: "not a status change" });
+    return;
+  }
+
   // Auto-stop issue chat sessions when issue moves to Done or Cancelled
   const newState = payload.data.state?.name?.toLowerCase();
   if (newState === "done" || newState === "cancelled") {
