@@ -153,14 +153,14 @@ router.post("/linear", async (req: Request, res: Response) => {
     onLinearWebhook();
   }
 
-  // Only trigger agents for Issue updates with state changes
-  if (payload.type !== "Issue" || payload.action !== "update") {
-    res.json({ ok: true, matched: 0, reason: "not an issue status update" });
+  // Trigger agents for Issue creates and updates with a state
+  if (payload.type !== "Issue" || (payload.action !== "update" && payload.action !== "create")) {
+    res.json({ ok: true, matched: 0, reason: "not an issue create/update" });
     return;
   }
 
   if (!payload.data.state) {
-    res.json({ ok: true, matched: 0, reason: "no state change" });
+    res.json({ ok: true, matched: 0, reason: "no state in payload" });
     return;
   }
 
