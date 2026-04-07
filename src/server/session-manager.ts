@@ -14,6 +14,9 @@ import { onIssueAgentComplete } from "./issue-queue.js";
 // Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
 
+const MAX_SESSION_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+const sessionTimeouts = new Map<string, NodeJS.Timeout>();
+
 function sessionKey(projectId: string, agentId: string, sessionId: string): string {
   return `${projectId}:${agentId}:${sessionId}`;
 }
@@ -167,6 +170,17 @@ export function startNewSession(
 
   activeProcesses.set(sKey, child);
 
+  // Kill the container if it exceeds the max session duration
+  const timeout = setTimeout(() => {
+    log("system", `Session exceeded ${MAX_SESSION_DURATION_MS / 60000}m timeout — stopping`);
+    child.kill("SIGTERM");
+    // Force kill if SIGTERM doesn't work after 10s
+    setTimeout(() => {
+      if (activeProcesses.has(sKey)) child.kill("SIGKILL");
+    }, 10_000);
+  }, MAX_SESSION_DURATION_MS);
+  sessionTimeouts.set(sKey, timeout);
+
   // Add to activeSessions array
   const current = getAgentState(project.id, agent.id);
   const newSession = { sessionId, pid: child.pid || null, startedAt: new Date().toISOString(), agentName: agent.name, linearIdentifier: agent.linearIdentifier };
@@ -224,6 +238,8 @@ export function startNewSession(
 
   child.on("close", (code) => {
     activeProcesses.delete(sKey);
+    const t = sessionTimeouts.get(sKey);
+    if (t) { clearTimeout(t); sessionTimeouts.delete(sKey); }
     if (triggerFile) try { fs.unlinkSync(triggerFile); } catch {}
     const status = code === 0 ? "completed" : "errored";
     log("system", `Process exited with code ${code}`);
