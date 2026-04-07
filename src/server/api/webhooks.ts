@@ -12,6 +12,22 @@ import { downloadIssueAttachments } from "../attachment-downloader.js";
 const router = Router();
 const RUNNER_JSON = path.join(process.cwd(), "runner.json");
 
+// Deduplicate webhooks: Linear can deliver the same event multiple times.
+// Key: "issueId:action:newState", value: timestamp of first seen.
+const recentWebhooks = new Map<string, number>();
+const WEBHOOK_DEDUP_TTL_MS = 30_000; // ignore duplicates within 30s
+
+function isDuplicateWebhook(key: string): boolean {
+  const now = Date.now();
+  // Prune old entries
+  for (const [k, ts] of recentWebhooks) {
+    if (now - ts > WEBHOOK_DEDUP_TTL_MS) recentWebhooks.delete(k);
+  }
+  if (recentWebhooks.has(key)) return true;
+  recentWebhooks.set(key, now);
+  return false;
+}
+
 // Linear webhook payload types (subset of what Linear sends)
 interface LinearWebhookPayload {
   action: "create" | "update" | "remove";
@@ -172,6 +188,15 @@ router.post("/linear", async (req: Request, res: Response) => {
     return;
   }
 
+  // Deduplicate: Linear can deliver the same webhook multiple times
+  const issueId = payload.data.identifier ?? payload.data.id;
+  const dedupKey = `${issueId}:${payload.action}:${payload.data.state.name}`;
+  if (isDuplicateWebhook(dedupKey)) {
+    console.log(`[webhook/linear] Duplicate ignored: ${dedupKey}`);
+    res.json({ ok: true, matched: 0, reason: "duplicate webhook" });
+    return;
+  }
+
   // Auto-stop issue chat sessions when issue moves to Done or Cancelled
   const newState = payload.data.state?.name?.toLowerCase();
   if (newState === "done" || newState === "cancelled") {
@@ -254,7 +279,6 @@ router.post("/linear", async (req: Request, res: Response) => {
           attachmentsDir: projectAttachmentsDir || undefined,
           linearIdentifier: payload.data.identifier,
         };
-        const issueId = payload.data.identifier ?? payload.data.id;
         const result = enqueueForIssue(issueId, project, agentWithContext);
 
         if (result.started) {
