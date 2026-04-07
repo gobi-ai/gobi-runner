@@ -7,6 +7,8 @@ import type { AgentConfig, AgentState, Project } from "./types.js";
 import { updateAgentState, getAgentState, loadProjectState, saveProjectState } from "./state-store.js";
 import { appendLog, emitLogEvent, setActiveSession, clearActiveSession } from "./api/logs.js";
 import { appendExecution } from "./execution-store.js";
+import { getProvider } from "./providers/index.js";
+import { loadProjectConfig } from "./project-resolver.js";
 
 // Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
@@ -73,41 +75,51 @@ function buildDockerArgs(
   agent: AgentConfig,
   sessionId: string
 ): string[] {
+  const provider = getProvider(agent.provider ?? "claude");
   const image = project.dockerImage ?? "agent-runner:latest";
   const home = process.env.HOME ?? "/root";
+  const config = loadProjectConfig(project.targetDir);
+
+  // Provider-specific env vars (e.g. ANTHROPIC_API_KEY for Claude, GITHUB_TOKEN for Copilot)
+  const providerEnv = Object.entries(provider.getRequiredEnvVars())
+    .flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+
+  // Mount local directories from config as /local/<basename>
+  const localMounts = (config.localDirs ?? []).flatMap((dir) => {
+    const name = path.basename(dir);
+    return ["-v", `${dir}:/local/${name}:ro`];
+  });
+
   return [
     "run", "--rm",
     "--name", `agent-${agent.id}-${sessionId}`,
     "-e", `AGENT=${agent.id}`,
     "-e", `SESSION_ID=${sessionId}`,
+    "-e", `PROVIDER=${provider.id}`,
     "-e", `PERMISSION_MODE=${agent.permissionMode}`,
     "-e", `MODEL=${agent.model ?? ""}`,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
-    "-e", `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ?? ""}`,
-    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? ""}`,
+    "-e", `GITHUB_REPOS=${(config.githubRepos ?? []).join(" ")}`,
     "-e", `AGENT_TOOLS=${(agent.tools ?? []).join(",")}`,
     // Langfuse credentials (only used when tools includes "langfuse")
     "-e", `LANGFUSE_PUBLIC_KEY=${process.env.LANGFUSE_PUBLIC_KEY ?? ""}`,
     "-e", `LANGFUSE_SECRET_KEY=${process.env.LANGFUSE_SECRET_KEY ?? ""}`,
     "-e", `LANGFUSE_HOST=${process.env.LANGFUSE_HOST ?? "https://cloud.langfuse.com"}`,
+    ...providerEnv,
     // Agent prompt files
     "-v", `${project.targetDir}/.runner/agents:/agents:ro`,
     // Shared MD files (CLAUDE.md, LINEAR.md, approvers/, actors/)
     "-v", `${project.targetDir}:/source:ro`,
-    // Host git credentials — used for pull inside container
+    // Local directories from project config
+    ...localMounts,
+    // Host git credentials — used for clone/pull inside container
     "-v", `${home}/.gitconfig:/home/agent/.gitconfig:ro`,
     "-v", `${home}/.git-credentials:/home/agent/.git-credentials:ro`,
     "-v", `${home}/.ssh:/home/agent/.ssh:ro`,
     // gh auth state — needed for 'gh auth git-credential' referenced in .gitconfig
     "-v", `${home}/.config/gh:/home/agent/.config/gh:ro`,
-    // Mount ~/.claude so session resume works across container runs
-    "-v", `${home}/.claude:/home/agent/.claude`,
-    // .claude.json lives at home root, not inside .claude/
-    "-v", `${home}/.claude.json:/home/agent/.claude.json`,
-    // Sentry MCP auth state — cached OAuth tokens for @sentry/mcp-server
-    ...(fs.existsSync(`${home}/.sentry`) ? ["-v", `${home}/.sentry:/home/agent/.sentry:ro`] : []),
-    // GCP service account key for gcloud (entrypoint handles activation)
-    ...(fs.existsSync(`${home}/.config/gcloud/service-account.json`) ? ["-v", `${home}/.config/gcloud/service-account.json:/home/agent/.config/gcloud/service-account.json:ro`] : []),
+    // Provider-specific volume mounts (e.g. ~/.claude for Claude, ~/.config/gh for Copilot)
+    ...provider.getExtraVolumeMounts(home),
     image,
   ];
 }
@@ -167,35 +179,40 @@ export function startNewSession(
   });
 
   let sessionCostUsd = 0;
+  const provider = getProvider(agent.provider ?? "claude");
 
   child.stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
     for (const line of text.split("\n").filter(Boolean)) {
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.type === "assistant" && parsed.message?.content) {
-          for (const block of parsed.message.content) {
-            if (block.type === "text") {
-              log("output", block.text);
-            } else if (block.type === "tool_use") {
-              const input = block.input || {};
-              const summary = formatToolInput(block.name, input);
-              log("output", summary ? `[tool: ${block.name}] ${summary}` : `[tool: ${block.name}]`);
+      const events = provider.parseOutputLine(line);
+      for (const event of events) {
+        switch (event.type) {
+          case "text":
+            log("output", event.text);
+            break;
+          case "tool_use": {
+            const summary = formatToolInput(event.name, event.input);
+            log("output", summary ? `[tool: ${event.name}] ${summary}` : `[tool: ${event.name}]`);
+            break;
+          }
+          case "cost": {
+            sessionCostUsd += event.costUsd;
+            log("info", `Session completed. Cost: $${Number(event.costUsd).toFixed(6)}`);
+            if (event.costUsd > 0) {
+              const current = getAgentState(project.id, agent.id);
+              updateAgentState(project.id, agent.id, {
+                totalCostUsd: (current.totalCostUsd || 0) + event.costUsd,
+              });
             }
+            break;
           }
-        } else if (parsed.type === "result") {
-          const runCost = parsed.cost_usd ?? 0;
-          sessionCostUsd += runCost;
-          log("info", `Session completed. Cost: $${Number(runCost).toFixed(6)}`);
-          if (runCost > 0) {
-            const current = getAgentState(project.id, agent.id);
-            updateAgentState(project.id, agent.id, {
-              totalCostUsd: (current.totalCostUsd || 0) + runCost,
-            });
-          }
+          case "error":
+            log("error", event.message);
+            break;
+          case "raw":
+            log("output", event.text);
+            break;
         }
-      } catch {
-        log("output", line);
       }
     }
   });

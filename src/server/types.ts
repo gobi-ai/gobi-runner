@@ -5,6 +5,14 @@ export interface Project {
   dockerImage?: string;
 }
 
+/** Per-project config stored at <targetDir>/.runner/config.json */
+export interface ProjectConfig {
+  /** GitHub repos to clone into agent containers (full "org/repo" paths) */
+  githubRepos?: string[];
+  /** Local directories to mount read-only into agent containers */
+  localDirs?: string[];
+}
+
 export interface RunnerConfig {
   projects: Project[];
 }
@@ -34,6 +42,7 @@ export interface AgentFrontmatter {
   name: string;
   schedule?: string;
   enabled: boolean;
+  provider?: string; // "claude" | "copilot", defaults to "claude"
   permissionMode: string;
   model: string;
   tools?: AgentTool[];

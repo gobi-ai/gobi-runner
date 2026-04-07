@@ -3,13 +3,14 @@ set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Required env vars
-# AGENT              - agent name: planner | plan-reviewer | developer | glasses-investigator
+# AGENT              - agent name (matches filename in /agents/<name>.md)
 # LINEAR_API_KEY     - Linear API key
-# GITHUB_ORG         - GitHub org (e.g. my-org)
-# SESSION_ID         - Claude session ID (passed by runner)
-# PERMISSION_MODE    - Claude permission mode (default: bypassPermissions)
-# MODEL              - Claude model override (optional)
+# SESSION_ID         - session ID (passed by runner)
+# PERMISSION_MODE    - permission mode (default: bypassPermissions)
+# MODEL              - model override (optional)
+# PROVIDER           - AI provider: claude | copilot (default: claude)
 # AGENT_TOOLS        - comma-separated list of tools: linear,sentry,langfuse,gcloud
+# GITHUB_REPOS       - space-separated list of repos to clone (full "org/repo" paths)
 # LANGFUSE_PUBLIC_KEY - Langfuse public key (when tools includes langfuse)
 # LANGFUSE_SECRET_KEY - Langfuse secret key (when tools includes langfuse)
 # LANGFUSE_HOST       - Langfuse host URL (default: https://cloud.langfuse.com)
@@ -20,16 +21,18 @@ set -euo pipefail
 #   ~/.git-credentials    - host ~/.git-credentials (read-only)
 #   ~/.ssh                - host ~/.ssh (read-only)
 #   ~/.config/gh          - host ~/.config/gh (read-only) — gh auth for git credential helper
-#   /agents               - host ~/monorepo/.runner/agents (read-only)
-#   /source               - host ~/monorepo (read-only) — MD files
-#   ~/.claude             - host ~/.claude — session continuity
+#   /agents               - host <targetDir>/.runner/agents (read-only)
+#   /source               - host <targetDir> (read-only) — shared MD files
+#   /local/<name>         - host local dirs (read-only, if configured)
+#   Provider-specific volumes are mounted by session-manager.ts
 # ---------------------------------------------------------------------------
 
-: "${AGENT:?AGENT env var is required (planner|plan-reviewer|developer)}"
+: "${AGENT:?AGENT env var is required}"
 : "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
 : "${SESSION_ID:?SESSION_ID is required}"
 
 PERMISSION_MODE="${PERMISSION_MODE:-bypassPermissions}"
+PROVIDER="${PROVIDER:-claude}"
 AGENT_FILE="/agents/${AGENT}.md"
 
 if [[ ! -f "$AGENT_FILE" ]]; then
@@ -38,28 +41,40 @@ if [[ ! -f "$AGENT_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Restore .claude.json if missing (can get lost when ~/.claude is mounted)
+# Clone or update GitHub repos
+# GITHUB_REPOS contains full "org/repo" paths (e.g. "myorg/backend myorg/frontend")
 # ---------------------------------------------------------------------------
-CLAUDE_JSON="${HOME}/.claude.json"
-if [[ ! -f "$CLAUDE_JSON" ]]; then
-  BACKUP=$(ls -t "${HOME}/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
-  if [[ -n "$BACKUP" ]]; then
-    cp "$BACKUP" "$CLAUDE_JSON"
-    echo "→ Restored .claude.json from backup"
-  fi
+if [[ -n "${GITHUB_REPOS:-}" ]]; then
+  echo "→ Syncing GitHub repos..."
+  for full_repo in ${GITHUB_REPOS}; do
+    repo_name=$(basename "$full_repo")
+    repo_dir="/monorepo/${repo_name}"
+    if [[ -d "$repo_dir/.git" ]]; then
+      # Repo already exists — pull latest
+      branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+      git -C "$repo_dir" fetch origin --quiet 2>/dev/null && \
+      git -C "$repo_dir" reset --hard "origin/${branch}" --quiet 2>/dev/null && \
+      echo "  ✓ ${repo_name} (updated)" || echo "  ⚠ Could not update ${repo_name}"
+    else
+      # Fresh clone (shallow for speed)
+      git clone --depth=1 "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null && \
+      echo "  ✓ ${repo_name} (cloned)" || echo "  ⚠ Could not clone ${full_repo}"
+    fi
+  done
 fi
 
 # ---------------------------------------------------------------------------
-# Pull latest on all repos (shallow clone — use fetch + reset)
+# Symlink local dirs into /monorepo (they're mounted at /local/<name>)
 # ---------------------------------------------------------------------------
-echo "→ Pulling latest..."
-for repo_dir in /monorepo/*/; do
-  repo=$(basename "$repo_dir")
-  branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "develop")
-  git -C "$repo_dir" fetch origin --quiet 2>/dev/null && \
-  git -C "$repo_dir" reset --hard "origin/${branch}" --quiet 2>/dev/null && \
-  echo "  ✓ $repo" || echo "  ⚠ Could not update $repo, skipping"
-done
+if [[ -d /local ]]; then
+  for dir in /local/*/; do
+    name=$(basename "$dir")
+    if [[ ! -e "/monorepo/${name}" ]]; then
+      ln -s "$dir" "/monorepo/${name}"
+      echo "  ✓ ${name} (local)"
+    fi
+  done
+fi
 
 # ---------------------------------------------------------------------------
 # Copy shared MD files into /monorepo root
@@ -68,83 +83,6 @@ cp -f  /source/CLAUDE.md  /monorepo/CLAUDE.md  2>/dev/null || true
 cp -f  /source/LINEAR.md  /monorepo/LINEAR.md  2>/dev/null || true
 cp -rf /source/approvers  /monorepo/approvers  2>/dev/null || true
 cp -rf /source/actors     /monorepo/actors     2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# Clear stale MCP auth cache — prevents Claude from skipping MCP servers
-# that previously failed to connect (e.g. due to missing env vars)
-# ---------------------------------------------------------------------------
-rm -f "${HOME}/.claude/mcp-needs-auth-cache.json"
-
-# ---------------------------------------------------------------------------
-# Generate /monorepo/.mcp.json based on AGENT_TOOLS env var
-# Claude Code reads MCP config from .mcp.json in the working directory,
-# NOT from ~/.claude/settings.json.
-# AGENT_TOOLS is a comma-separated list: linear,sentry,langfuse,gcloud
-# ---------------------------------------------------------------------------
-MCP_FILE="/monorepo/.mcp.json"
-
-# Start building the mcpServers object
-MCP_SERVERS=""
-LANGFUSE_PLUGIN=""
-
-IFS=',' read -ra TOOLS <<< "${AGENT_TOOLS:-}"
-for tool in "${TOOLS[@]}"; do
-  tool=$(echo "$tool" | xargs)  # trim whitespace
-  case "$tool" in
-    linear)
-      MCP_SERVERS="${MCP_SERVERS}${MCP_SERVERS:+,}
-    \"linear\": {
-      \"type\": \"http\",
-      \"url\": \"https://mcp.linear.app/mcp\",
-      \"headers\": { \"Authorization\": \"Bearer ${LINEAR_API_KEY}\" }
-    }"
-      echo "  ✓ MCP: linear"
-      ;;
-    sentry)
-      MCP_SERVERS="${MCP_SERVERS}${MCP_SERVERS:+,}
-    \"sentry\": {
-      \"command\": \"sentry-mcp\"
-    }"
-      echo "  ✓ MCP: sentry"
-      ;;
-    langfuse)
-      # Langfuse uses a Claude Code skill + langfuse-cli (not MCP)
-      export LANGFUSE_PUBLIC_KEY="${LANGFUSE_PUBLIC_KEY:-}"
-      export LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
-      export LANGFUSE_HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
-      LANGFUSE_PLUGIN="--plugin-dir /plugins/langfuse"
-      echo "  ✓ Langfuse skill + CLI"
-      ;;
-    gcloud)
-      # gcloud needs a writable config dir; the mount at ~/.config/gcloud is read-only
-      SA_MOUNT="/home/agent/.config/gcloud/service-account.json"
-      export CLOUDSDK_CONFIG=/tmp/gcloud-config
-      mkdir -p "$CLOUDSDK_CONFIG"
-      if [[ -f "$SA_MOUNT" ]]; then
-        cp "$SA_MOUNT" "$CLOUDSDK_CONFIG/service-account.json"
-        gcloud auth activate-service-account --key-file="$CLOUDSDK_CONFIG/service-account.json" --quiet 2>/dev/null && \
-          echo "  ✓ gcloud: service account activated" || \
-          echo "  ⚠ gcloud: service account activation failed"
-      else
-        echo "  ⚠ gcloud: no service account key found at $SA_KEY"
-      fi
-      ;;
-    "")
-      # skip empty
-      ;;
-    *)
-      echo "  ⚠ Unknown tool: $tool"
-      ;;
-  esac
-done
-
-cat > "$MCP_FILE" <<MCP_EOF
-{
-  "mcpServers": {${MCP_SERVERS}
-  }
-}
-MCP_EOF
-echo "→ Generated .mcp.json with tools: ${AGENT_TOOLS:-none}"
 
 # ---------------------------------------------------------------------------
 # Strip YAML frontmatter from agent file → /tmp/agent-prompt.md
@@ -158,6 +96,7 @@ awk '
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Agent      : $AGENT"
+echo "  Provider   : $PROVIDER"
 echo "  Tools      : ${AGENT_TOOLS:-none}"
 echo "  Session ID : $SESSION_ID"
 echo "  Permission : $PERMISSION_MODE"
@@ -167,7 +106,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Build initial prompt — use trigger context if available
 # ---------------------------------------------------------------------------
-INITIAL_PROMPT="Begin."
+export INITIAL_PROMPT="Begin."
 if [[ -f /tmp/trigger-context.md ]]; then
   TRIGGER_CONTEXT=$(cat /tmp/trigger-context.md)
   INITIAL_PROMPT="${TRIGGER_CONTEXT}
@@ -177,41 +116,12 @@ Begin."
 fi
 
 # ---------------------------------------------------------------------------
-# Run Claude
+# Delegate to provider-specific entrypoint
 # ---------------------------------------------------------------------------
-CLAUDE_ARGS=(
-  --append-system-prompt-file /tmp/agent-prompt.md
-  --print
-  --verbose
-  --output-format stream-json
-  --session-id "$SESSION_ID"
-  --permission-mode "$PERMISSION_MODE"
-  -p "$INITIAL_PROMPT"
-)
-
-if [[ -n "${MODEL:-}" ]]; then
-  CLAUDE_ARGS+=(--model "$MODEL")
+PROVIDER_SCRIPT="/entrypoints/${PROVIDER}.sh"
+if [[ ! -f "$PROVIDER_SCRIPT" ]]; then
+  echo "ERROR: Unknown provider: $PROVIDER (no script at $PROVIDER_SCRIPT)"
+  exit 1
 fi
 
-# Add Langfuse plugin if enabled
-if [[ -n "${LANGFUSE_PLUGIN:-}" ]]; then
-  CLAUDE_ARGS+=($LANGFUSE_PLUGIN)
-fi
-
-# ---------------------------------------------------------------------------
-# Pre-authenticate Sentry MCP (optional, for non-interactive environments)
-# ---------------------------------------------------------------------------
-if [[ "${SENTRY_MCP_AUTH:-false}" == "true" ]]; then
-  if [[ ! -f "${HOME}/.sentry/mcp.json" ]]; then
-    echo "→ Authenticating Sentry MCP..."
-    if npx @sentry/mcp-server@latest auth login; then
-      echo "  ✓ Sentry MCP authenticated"
-    else
-      echo "  ⚠ Sentry MCP authentication failed, continuing without it"
-    fi
-  else
-    echo "→ Sentry MCP already authenticated"
-  fi
-fi
-
-exec claude "${CLAUDE_ARGS[@]}"
+source "$PROVIDER_SCRIPT"

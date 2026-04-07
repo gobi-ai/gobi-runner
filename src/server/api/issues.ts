@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import { spawn, type ChildProcess } from "child_process";
 import type { RunnerConfig, Project } from "../types.js";
 import { appendLog, emitLogEvent, setActiveSession, clearActiveSession } from "./logs.js";
+import { getProvider } from "../providers/index.js";
+import { loadProjectConfig } from "../project-resolver.js";
 
 const router = Router();
 const RUNNER_JSON = path.join(process.cwd(), "runner.json");
@@ -163,28 +165,41 @@ function getIssueSession(projectId: string, identifier: string): { running: bool
   return { running: true, sessionId: session.sessionId };
 }
 
-function buildDockerArgs(project: Project, identifier: string, sessionId: string, containerName: string, entrypoint?: string): string[] {
+function buildDockerArgs(project: Project, identifier: string, sessionId: string, containerName: string, entrypoint?: string, providerId?: string): string[] {
+  const provider = getProvider(providerId ?? "claude");
   const image = project.dockerImage ?? "agent-runner:latest";
   const home = process.env.HOME ?? "/root";
+  const config = loadProjectConfig(project.targetDir);
+
+  const providerEnv = Object.entries(provider.getRequiredEnvVars())
+    .flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+
+  // Mount local directories from config as /local/<basename>
+  const localMounts = (config.localDirs ?? []).flatMap((dir) => {
+    const name = path.basename(dir);
+    return ["-v", `${dir}:/local/${name}:ro`];
+  });
+
   return [
     "run", "--rm",
     "--entrypoint", entrypoint ?? "bash",
     "--name", containerName,
+    "-e", `PROVIDER=${provider.id}`,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
-    "-e", `GITHUB_ORG=${process.env.GITHUB_ORG ?? ""}`,
-    "-e", `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ?? ""}`,
+    "-e", `GITHUB_REPOS=${(config.githubRepos ?? []).join(" ")}`,
+    ...providerEnv,
     "-v", `${project.targetDir}:/source:ro`,
     "-v", `${project.targetDir}/.runner/agents:/agents:ro`,
+    // Local directories from project config
+    ...localMounts,
     "-v", `${home}/.gitconfig:/home/agent/.gitconfig:ro`,
     "-v", `${home}/.git-credentials:/home/agent/.git-credentials:ro`,
     "-v", `${home}/.ssh:/home/agent/.ssh:ro`,
     "-v", `${home}/.config/gh:/home/agent/.config/gh:ro`,
-    "-v", `${home}/.claude:/home/agent/.claude`,
-    "-v", `${home}/.claude.json:/home/agent/.claude.json`,
     // Mount MCP config into the working directory (Claude Code reads .mcp.json from cwd)
     "-v", `${path.resolve("claude-settings.json")}:/monorepo/.mcp.json:ro`,
-    // Sentry MCP auth state
-    ...(fs.existsSync(`${home}/.sentry`) ? ["-v", `${home}/.sentry:/home/agent/.sentry:ro`] : []),
+    // Provider-specific volume mounts
+    ...provider.getExtraVolumeMounts(home),
     image,
   ];
 }
@@ -284,23 +299,40 @@ function spawnIssueContainer(
   });
 }
 
-/** Run claude --print inside the container via docker exec. Returns promise when done. */
-function execClaude(
+/** Run AI provider CLI inside the container via docker exec. Returns promise when done. */
+function execProvider(
   session: IssueChatSession,
   prompt: string,
   isResume: boolean,
   model?: string,
+  providerId?: string,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const escaped = prompt.replace(/'/g, "'\\''");
-    const modelFlag = model ? `--model '${model}'` : "";
+    const provider = getProvider(providerId ?? "claude");
     const log = session.log!;
 
-    const claudeCmd = isResume
-      ? `cd /monorepo && claude -p '${escaped}' --print --verbose --output-format stream-json --resume '${session.sessionId}' --permission-mode bypassPermissions ${modelFlag}`
-      : `cd /monorepo && claude -p '${escaped}' --print --verbose --output-format stream-json --session-id '${session.sessionId}' --permission-mode bypassPermissions ${modelFlag}`;
+    let cmd;
+    if (isResume && provider.buildResumeCommand) {
+      cmd = provider.buildResumeCommand({
+        prompt,
+        sessionId: session.sessionId,
+        permissionMode: "bypassPermissions",
+        model,
+      });
+    }
+    if (!cmd) {
+      cmd = provider.buildCommand({
+        prompt,
+        sessionId: session.sessionId,
+        permissionMode: "bypassPermissions",
+        model,
+      });
+    }
 
-    const child = spawn("docker", ["exec", session.containerName!, "bash", "-c", claudeCmd], {
+    const shellArgs = cmd.args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+    const shellCmd = `cd /monorepo && ${cmd.binary} ${shellArgs}`;
+
+    const child = spawn("docker", ["exec", session.containerName!, "bash", "-c", shellCmd], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
     });
@@ -311,23 +343,27 @@ function execClaude(
 
     child.stdout?.on("data", (data: Buffer) => {
       for (const line of data.toString().split("\n").filter(Boolean)) {
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.type === "assistant" && parsed.message?.content) {
-            for (const block of parsed.message.content) {
-              if (block.type === "text") {
-                log("output", block.text);
-              } else if (block.type === "tool_use") {
-                const input = block.input || {};
-                const summary = formatToolInput(block.name, input);
-                log("output", summary ? `[tool: ${block.name}] ${summary}` : `[tool: ${block.name}]`);
-              }
+        const events = provider.parseOutputLine(line);
+        for (const event of events) {
+          switch (event.type) {
+            case "text":
+              log("output", event.text);
+              break;
+            case "tool_use": {
+              const summary = formatToolInput(event.name, event.input);
+              log("output", summary ? `[tool: ${event.name}] ${summary}` : `[tool: ${event.name}]`);
+              break;
             }
-          } else if (parsed.type === "result") {
-            log("info", `Cost: $${Number(parsed.cost_usd ?? 0).toFixed(6)}`);
+            case "cost":
+              log("info", `Cost: $${Number(event.costUsd).toFixed(6)}`);
+              break;
+            case "error":
+              log("error", event.message);
+              break;
+            case "raw":
+              log("output", event.text);
+              break;
           }
-        } catch {
-          log("output", line);
         }
       }
     });
@@ -341,7 +377,7 @@ function execClaude(
       session.child = null;
       session.busy = false;
       if (code !== 0) {
-        log("system", `Claude exited with code ${code}`);
+        log("system", `${provider.displayName} exited with code ${code}`);
       }
       // Schedule container cleanup after idle timeout
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
@@ -414,7 +450,7 @@ router.post("/:pid/issues/:identifier/message", async (req: Request, res: Respon
   if (!session) { res.status(404).json({ error: "No running session. Click Chat first." }); return; }
 
   if (session.busy) {
-    res.status(409).json({ error: "Claude is still responding. Wait for it to finish." });
+    res.status(409).json({ error: "Agent is still responding. Wait for it to finish." });
     return;
   }
 
@@ -435,8 +471,8 @@ router.post("/:pid/issues/:identifier/message", async (req: Request, res: Respon
     ? `${buildIssuePrompt(session.issueData)}\n\n## User Message\n\n${message}`
     : message;
 
-  // Run claude --print (or --resume) inside the container
-  execClaude(session, prompt, !isFirst, req.body.model);
+  // Run AI provider CLI (or --resume) inside the container
+  execProvider(session, prompt, !isFirst, req.body.model, req.body.provider);
   session.isFirstMessage = false;
 
   res.json({ ok: true });

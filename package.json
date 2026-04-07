@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server/index.ts",
     "dev:client": "vite",
     "build": "vite build",
-    "docker:build": "set -a && . ./.env && set +a && GH_TOKEN=$(gh auth token) DOCKER_BUILDKIT=1 docker build --build-arg CACHE_BUST=$(date +%s) --build-arg GITHUB_ORG=${GITHUB_ORG} --build-arg GITHUB_REPOS=\"${GITHUB_REPOS}\" --secret id=gh_token,env=GH_TOKEN -t agent-runner:latest .",
+    "docker:build": "DOCKER_BUILDKIT=1 docker build -t agent-runner:latest .",
     "start": "tsx src/server/index.ts"
   },
   "dependencies": {

@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import type { RunnerConfig } from "./types.js";
+import type { RunnerConfig, ProjectConfig } from "./types.js";
 
 const RUNNER_JSON = path.join(process.cwd(), "runner.json");
 
@@ -13,4 +13,11 @@ export function getProjectTargetDir(projectId: string): string {
 
 export function getRunnerDir(projectId: string): string {
   return path.join(getProjectTargetDir(projectId), ".runner");
+}
+
+/** Load .runner/config.json for a project. Returns empty config if file doesn't exist. */
+export function loadProjectConfig(targetDir: string): ProjectConfig {
+  const configPath = path.join(targetDir, ".runner", "config.json");
+  if (!fs.existsSync(configPath)) return {};
+  return JSON.parse(fs.readFileSync(configPath, "utf-8"));
 }

@@ -27,34 +27,10 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dea
 # node:20-slim ships a 'node' user at uid=1000 — reuse that uid for 'agent'
 RUN userdel node && useradd -m -u 1000 -s /bin/bash agent
 
-# Clone repos as a build-time checkpoint (entrypoint does fast pull at launch)
-# Build with: docker build -t agent-runner:latest .
-# GH_TOKEN is read automatically from `gh auth token` via the secret mount
-# GITHUB_ORG and GITHUB_REPOS must be set (no defaults — configure for your org)
-ARG GITHUB_ORG
-ARG GITHUB_REPOS=""
-ARG CACHE_BUST
-RUN --mount=type=secret,id=gh_token \
-    if GH_TOKEN=$(cat /run/secrets/gh_token 2>/dev/null) && [ -n "${GITHUB_ORG}" ] && [ -n "${GITHUB_REPOS}" ]; then \
-      mkdir -p /monorepo && \
-      for repo in ${GITHUB_REPOS}; do \
-        git clone --depth=1 --branch develop \
-          "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_ORG}/${repo}.git" "/monorepo/${repo}" || \
-        git clone --depth=1 \
-          "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_ORG}/${repo}.git" "/monorepo/${repo}"; \
-      done && \
-      for repo in ${GITHUB_REPOS}; do \
-        git -C "/monorepo/${repo}" remote set-url origin \
-          "https://github.com/${GITHUB_ORG}/${repo}.git"; \
-      done && \
-      chown -R agent:agent /monorepo; \
-    else \
-      echo "No GitHub token or repos provided - skipping repo cloning"; \
-      mkdir -p /monorepo && chown agent:agent /monorepo; \
-    fi
+# Create workspace directory
+RUN mkdir -p /monorepo && chown agent:agent /monorepo
 
 # Langfuse skill plugin (for langfuse-cli based data access)
-# CACHE_BUST ARG declared above also busts this layer
 RUN git clone --depth=1 https://github.com/langfuse/skills.git /plugins/langfuse \
     && mv /plugins/langfuse/.cursor-plugin /plugins/langfuse/.claude-plugin
 
@@ -65,8 +41,9 @@ USER agent
 RUN git config --global user.email "agent@runner.local" && \
     git config --global user.name "Agent Runner"
 
-# Entrypoint
+# Entrypoint + provider-specific scripts
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
+COPY --chmod=755 entrypoints/ /entrypoints/
 
 WORKDIR /monorepo
 
