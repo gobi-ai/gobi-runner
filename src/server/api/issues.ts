@@ -19,7 +19,12 @@ interface IssueChatSession {
   isFirstMessage?: boolean;
   issueData?: any;
   busy?: boolean;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
+  projectId?: string;
+  identifier?: string;
 }
+
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const issueSessions = new Map<string, IssueChatSession>();
 
 // --- Issue cache + SSE ---
@@ -338,6 +343,14 @@ function execClaude(
       if (code !== 0) {
         log("system", `Claude exited with code ${code}`);
       }
+      // Schedule container cleanup after idle timeout
+      if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+      session.cleanupTimer = setTimeout(() => {
+        if (!session.busy && session.projectId && session.identifier) {
+          log("system", `Idle for ${IDLE_TIMEOUT_MS / 1000}s — stopping container`);
+          stopIssueChatSession(session.projectId, session.identifier);
+        }
+      }, IDLE_TIMEOUT_MS);
       resolve();
     });
   });
@@ -363,7 +376,7 @@ router.post("/:pid/issues/:identifier/chat", async (req: Request, res: Response)
   }
 
   const sessionId = uuidv4();
-  const session: IssueChatSession = { sessionId, pid: null, child: null, isFirstMessage: true };
+  const session: IssueChatSession = { sessionId, pid: null, child: null, isFirstMessage: true, projectId: project.id, identifier };
   issueSessions.set(key, session);
 
   const log = (type: "system", message: string) => {
@@ -408,6 +421,12 @@ router.post("/:pid/issues/:identifier/message", async (req: Request, res: Respon
   const { message } = req.body;
   if (!message) { res.status(400).json({ error: "message is required" }); return; }
 
+  // Cancel idle cleanup timer — user is still active
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = undefined;
+  }
+
   session.log?.("system", `You: ${message}`);
 
   // On first message, prepend issue context
@@ -429,6 +448,8 @@ export function stopIssueChatSession(projectId: string, identifier: string): boo
   const key = `${projectId}:${identifier}`;
   const session = issueSessions.get(key);
   if (!session) return false;
+  // Clear idle cleanup timer
+  if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
   // Kill the container (which kills Claude inside it)
   if (session.child) {
     session.child.kill("SIGTERM");
