@@ -75,6 +75,13 @@ export interface LogEntry {
   sessionId?: string;
 }
 
+export interface QueueItem {
+  issueId: string;
+  agentId: string;
+  agentName: string;
+  linearIdentifier?: string;
+}
+
 export interface ExecutionRecord {
   sessionId: string;
   agentId: string;
@@ -124,6 +131,8 @@ export const api = {
     request<LogEntry[]>(`/projects/${pid}/agents/${aid}/logs?tail=${tail}${sessionId ? `&session=${sessionId}` : ""}`),
   getExecutions: (pid: string, limit = 50) =>
     request<ExecutionRecord[]>(`/projects/${pid}/executions?limit=${limit}`),
+  getQueue: (pid: string) =>
+    request<QueueItem[]>(`/projects/${pid}/queue`),
 
   getDomains: (pid: string) => request<Domain[]>(`/projects/${pid}/domains`),
   getDomain: (pid: string, did: string) =>

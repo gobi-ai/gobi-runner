@@ -71,10 +71,23 @@ export function isIssueRunning(issueId: string): boolean {
   return running.has(issueId);
 }
 
-/** Get queue status for debugging. */
-export function getQueueStatus(): { running: string[]; pending: string[] } {
+/** Get queue status. */
+export interface QueueItem {
+  issueId: string;
+  agentId: string;
+  agentName: string;
+  linearIdentifier?: string;
+}
+
+export function getQueueStatus(): { running: QueueItem[]; pending: QueueItem[] } {
+  const toItem = ([issueId, e]: [string, QueueEntry]): QueueItem => ({
+    issueId,
+    agentId: e.agent.id,
+    agentName: e.agent.name,
+    linearIdentifier: e.agent.linearIdentifier,
+  });
   return {
-    running: Array.from(running.entries()).map(([id, e]) => `${id}:${e.agent.id}`),
-    pending: Array.from(pending.entries()).map(([id, e]) => `${id}:${e.agent.id}`),
+    running: Array.from(running.entries()).map(toItem),
+    pending: Array.from(pending.entries()).map(toItem),
   };
 }

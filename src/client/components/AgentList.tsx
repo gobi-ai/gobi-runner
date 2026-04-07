@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import cronstrue from "cronstrue";
-import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type ExecutionRecord, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project, type ProviderInfo } from "../api";
+import { api, type Agent, type AgentState, type AgentTrigger, type CronTrigger, type ExecutionRecord, type IssueSession, type LinearIssue, type LinearWebhookTrigger, type Project, type ProviderInfo, type QueueItem } from "../api";
 import LogViewer from "./LogViewer";
 import IssueList from "./IssueList";
 
@@ -608,6 +608,7 @@ export default function AgentList({ project }: Props) {
     kind: "execution"; agentId: string; sessionId: string; label: string;
   } | null>(null);
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [issueChatInput, setIssueChatInput] = useState<Record<string, string>>({});
   const [issueChatSending, setIssueChatSending] = useState<Set<string>>(new Set());
   const [issueRefreshTrigger, setIssueRefreshTrigger] = useState(0);
@@ -616,6 +617,7 @@ export default function AgentList({ project }: Props) {
     api.getAgents(project.id).then(setAgents);
     api.getIssueSessions(project.id).then(setIssueSessions).catch(() => {});
     api.getExecutions(project.id).then(setExecutions).catch(() => {});
+    api.getQueue(project.id).then(setQueueItems).catch(() => {});
   }, [project.id]);
 
   const sendIssueChat = async (identifier: string) => {
@@ -728,7 +730,7 @@ export default function AgentList({ project }: Props) {
     refresh();
   };
 
-  const hasSidebarContent = instances.length > 0 || executions.length > 0;
+  const hasSidebarContent = instances.length > 0 || queueItems.length > 0 || executions.length > 0;
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
@@ -780,10 +782,42 @@ export default function AgentList({ project }: Props) {
                 </>
               )}
 
+              {/* Queued */}
+              {queueItems.length > 0 && (
+                <>
+                  <div style={{ ...sidebarSectionLabel, marginTop: instances.length > 0 ? 12 : 4 }}>
+                    <span style={sectionDot("#F59E0B")} />
+                    Queued ({queueItems.length})
+                  </div>
+                  {queueItems.map((item, i) => (
+                    <div
+                      key={`${item.issueId}:${item.agentId}`}
+                      style={{
+                        ...sidebarRow,
+                        opacity: 0.8,
+                        border: "1px solid transparent",
+                      }}
+                    >
+                      <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginTop: 4 }} />
+                      <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {item.agentName}
+                        </div>
+                        {item.linearIdentifier && (
+                          <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", gap: 6 }}>
+                            <span style={{ fontWeight: 600, color: "var(--semantic-info)", fontFamily: "monospace" }}>{item.linearIdentifier}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+
               {/* Execution History */}
               {executions.length > 0 && (
                 <>
-                  <div style={{ ...sidebarSectionLabel, marginTop: instances.length > 0 ? 12 : 4 }}>
+                  <div style={{ ...sidebarSectionLabel, marginTop: instances.length > 0 || queueItems.length > 0 ? 12 : 4 }}>
                     <span style={sectionDot("#7D7A75")} />
                     History ({executions.length})
                   </div>
