@@ -248,7 +248,7 @@ router.post("/linear", async (req: Request, res: Response) => {
             );
             if (result) {
               projectAttachmentsDir = result.dir;
-              triggerContext += `\n\n### Attachments\n\nIssue images have been downloaded to \`/tmp/attachments/\`. See \`/tmp/attachments/attachments.md\` for the full list.`;
+              triggerContext += `\n\n### Attachments\n\nIssue attachments (images, files, logs) have been downloaded to \`/tmp/attachments/\`. Zip files are extracted into subdirectories. See \`/tmp/attachments/attachments.md\` for the full list.`;
             } else {
               projectAttachmentsDir = ""; // no attachments, don't retry
             }
