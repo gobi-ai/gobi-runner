@@ -42,22 +42,15 @@ RUN git config --global user.email "agent@runner.local" && \
     git config --global user.name "Agent Runner"
 
 # Pre-clone repos into the image so agents start with code already present.
-# The GH_TOKEN build secret is supplied by the cron job:
-#   docker build --secret id=gh_token,env=GH_TOKEN ...
-# Repos are shallow-cloned on the develop branch. The entrypoint pulls
-# latest develop at session start, so stale clones just mean a faster pull.
+# GITHUB_REPOS is a space-separated list of "org/repo" paths, passed as a build arg.
+# The cron job reads it from .runner/config.json:
+#   --build-arg GITHUB_REPOS="$(jq -r '.githubRepos // [] | join(" ")' /path/to/.runner/config.json)"
+# Repos are shallow-cloned on develop. The entrypoint pulls latest at session start.
+ARG GITHUB_REPOS=""
 WORKDIR /monorepo
 RUN --mount=type=secret,id=gh_token,uid=1000 \
     export GH_TOKEN=$(cat /run/secrets/gh_token) && \
-    for repo in \
-      gobi-ai/gobi-app \
-      gobi-ai/gobi-backend \
-      gobi-ai/gobi-cli \
-      gobi-ai/gobi-cloud \
-      gobi-ai/gobi-desktop \
-      gobi-ai/gobi-web \
-      gobi-ai/gobi-webdrive \
-    ; do \
+    for repo in ${GITHUB_REPOS}; do \
       name=$(basename "$repo") && \
       git clone --depth=1 --branch develop \
         "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" \
