@@ -19,9 +19,7 @@ export class ClaudeProvider implements AIProvider {
   ];
 
   getRequiredEnvVars(): Record<string, string> {
-    return {
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
-    };
+    return {};
   }
 
   buildCommand(opts: CommandOpts): ProviderCommand {

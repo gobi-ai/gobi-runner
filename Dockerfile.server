@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+#
+# Outer container for the agent runner server (DinD mode).
+# Runs the Node.js server + web UI. Spawns inner agent containers
+# via the host's Docker socket mounted at /var/run/docker.sock.
+#
+FROM node:20-slim
+
+# System deps
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    jq \
+    ca-certificates \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user with uid=1000 to match typical host user
+RUN userdel node && useradd -m -u 1000 -s /bin/bash agent
+
+# App directory
+WORKDIR /app
+
+# Install dependencies (production + tsx for running TypeScript)
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Copy source code and entrypoint scripts (needed for agent image context)
+COPY tsconfig.json vite.config.ts ./
+COPY src/ ./src/
+COPY entrypoint.sh ./entrypoint.sh
+COPY entrypoints/ ./entrypoints/
+
+# Copy agent Dockerfile so the image can be built from inside the container
+COPY Dockerfile ./Dockerfile
+
+# Build the web UI
+RUN npm run build
+
+# Pre-built client is in dist/client/
+# Server runs via tsx from src/
+
+# Create directories that will be used at runtime
+RUN mkdir -p /host-home /projects /tmp/agent-runner \
+    && chown -R agent:agent /app /host-home /projects /tmp/agent-runner
+
+USER agent
+
+EXPOSE 3456
+
+CMD ["npx", "tsx", "src/server/index.ts"]

@@ -1,6 +1,5 @@
 import { spawn, execSync, type ChildProcess } from "child_process";
 import fs from "fs";
-import os from "os";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentConfig, AgentState, Project } from "./types.js";
@@ -10,6 +9,7 @@ import { appendExecution } from "./execution-store.js";
 import { getProvider } from "./providers/index.js";
 import { loadProjectConfig } from "./project-resolver.js";
 import { onIssueAgentComplete } from "./issue-queue.js";
+import { isContainerized, toHostPath, getHomeDir, getTempDir } from "./path-remap.js";
 
 // Keyed by "projectId:agentId:sessionId" to support multiple concurrent sessions
 const activeProcesses = new Map<string, ChildProcess>();
@@ -81,7 +81,7 @@ function buildDockerArgs(
 ): string[] {
   const provider = getProvider(agent.provider ?? "claude");
   const image = project.dockerImage ?? "agent-runner:latest";
-  const home = process.env.HOME ?? "/root";
+  const home = getHomeDir();
   const config = loadProjectConfig(project.targetDir);
 
   // Provider-specific env vars (e.g. ANTHROPIC_API_KEY for Claude, GITHUB_TOKEN for Copilot)
@@ -142,7 +142,9 @@ export function startNewSession(
   // If webhook trigger context exists, write it to a temp file and mount it
   let triggerFile: string | undefined;
   if (agent.triggerContext) {
-    triggerFile = path.join(os.tmpdir(), `trigger-${sessionId}.md`);
+    const tempDir = getTempDir();
+    fs.mkdirSync(tempDir, { recursive: true });
+    triggerFile = path.join(tempDir, `trigger-${sessionId}.md`);
     fs.writeFileSync(triggerFile, agent.triggerContext);
     // Insert volume mount before the image name (last element)
     const imgIdx = args.length - 1;
@@ -153,6 +155,17 @@ export function startNewSession(
   if (agent.attachmentsDir && fs.existsSync(agent.attachmentsDir)) {
     const imgIdx = args.length - 1;
     args.splice(imgIdx, 0, "-v", `${agent.attachmentsDir}:/tmp/attachments:ro`);
+  }
+
+  // In DinD mode, remap all -v source paths from container-internal to host-absolute.
+  // Must run after all volume mounts are added (trigger context, attachments, etc.).
+  if (isContainerized()) {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-v" && args[i + 1]) {
+        const [src, ...rest] = args[i + 1].split(":");
+        args[i + 1] = [toHostPath(src), ...rest].join(":");
+      }
+    }
   }
 
   const log = (type: "info" | "error" | "output" | "system", message: string) => {

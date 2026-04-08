@@ -1,0 +1,54 @@
+# Docker Compose for running the agent runner server in DinD mode.
+#
+# Prerequisites:
+#   1. Build the agent container image: docker build -t agent-runner:latest .
+#   2. Create .env with your API keys (see .env.example)
+#   3. Set HOST_PROJECTS_DIR and HOST_HOME_DIR in .env
+#   4. Set runner.json targetDir paths to /projects/<id>
+#
+# Usage:
+#   docker compose -f docker-compose.server.yml up -d
+#   Open http://localhost:3456
+#
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: agent-runner
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    env_file:
+      - .env
+    environment:
+      # These map container-internal paths back to host paths for inner container volume mounts
+      HOST_PROJECTS_DIR: ${HOST_PROJECTS_DIR:-${HOME}}
+      HOST_HOME_DIR: ${HOST_HOME_DIR:-${HOME}}
+      HOST_TEMP_DIR: ${HOST_TEMP_DIR:-/tmp/agent-runner}
+    volumes:
+      # Docker socket — lets the runner spawn agent containers on the host daemon
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Project directories — add one line per project, mounted at /projects/<id>
+      - ${HOST_PROJECTS_DIR}/monorepo:/projects/monorepo
+
+      # Credentials — mounted at /host-home/ inside the outer container
+      - ${HOST_HOME_DIR}/.claude:/host-home/.claude
+      - ${HOST_HOME_DIR}/.gitconfig:/host-home/.gitconfig:ro
+      - ${HOST_HOME_DIR}/.git-credentials:/host-home/.git-credentials:ro
+      - ${HOST_HOME_DIR}/.ssh:/host-home/.ssh:ro
+      - ${HOST_HOME_DIR}/.config/gh:/host-home/.config/gh:ro
+
+      # Optional credentials — comment out if not used
+      # - ${HOST_HOME_DIR}/.claude.json:/host-home/.claude.json:ro
+      # - ${HOST_HOME_DIR}/.sentry:/host-home/.sentry:ro
+      # - ${HOST_HOME_DIR}/.config/gcloud:/host-home/.config/gcloud:ro
+
+      # Shared temp dir for trigger files and attachments (accessible by both containers)
+      - ${HOST_TEMP_DIR:-/tmp/agent-runner}:/tmp/agent-runner
+
+      # Runner config — edit on host, changes reflected immediately on restart
+      - ./runner.json:/app/runner.json:ro
+    group_add:
+      - ${DOCKER_GID:-999}

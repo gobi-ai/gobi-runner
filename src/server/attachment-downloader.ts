@@ -57,6 +57,46 @@ async function fetchLinearAttachments(
   }
 }
 
+/**
+ * Fetch all comments on a Linear issue and extract inline image URLs.
+ */
+async function fetchCommentImageUrls(
+  issueId: string,
+  apiKey: string
+): Promise<string[]> {
+  const query = `
+    query($id: String!) {
+      issue(id: $id) {
+        comments {
+          nodes {
+            body
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const res = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: { Authorization: apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables: { id: issueId } }),
+    });
+    const data = (await res.json()) as any;
+    const nodes = data.data?.issue?.comments?.nodes ?? [];
+    const urls: string[] = [];
+    for (const comment of nodes) {
+      if (comment.body) {
+        urls.push(...extractImageUrls(comment.body));
+      }
+    }
+    return urls;
+  } catch (err) {
+    console.error(`[attachments] Failed to fetch comments for ${issueId}:`, err);
+    return [];
+  }
+}
+
 function isImageUrl(url: string): boolean {
   const lower = url.toLowerCase();
   return (
@@ -127,10 +167,14 @@ export async function downloadIssueAttachments(
   // Collect image URLs from description
   const descriptionUrls = issueDescription ? extractImageUrls(issueDescription) : [];
 
-  // Collect image URLs from Linear attachments API
+  // Collect image URLs from Linear attachments API and comments
   let attachmentUrls: { url: string; title: string }[] = [];
+  let commentUrls: string[] = [];
   if (issueId && apiKey) {
-    attachmentUrls = await fetchLinearAttachments(issueId, apiKey);
+    [attachmentUrls, commentUrls] = await Promise.all([
+      fetchLinearAttachments(issueId, apiKey),
+      fetchCommentImageUrls(issueId, apiKey),
+    ]);
   }
 
   // Merge, dedup by URL
@@ -146,6 +190,12 @@ export async function downloadIssueAttachments(
     if (!seen.has(att.url)) {
       seen.add(att.url);
       allUrls.push(att);
+    }
+  }
+  for (const url of commentUrls) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      allUrls.push({ url, title: "" });
     }
   }
 

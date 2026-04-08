@@ -48,7 +48,7 @@ interface LinearWebhookPayload {
     [key: string]: unknown;
   };
   updatedFrom?: {
-    state?: { name: string; type: string };
+    stateId?: string;
     [key: string]: unknown;
   };
   url?: string;
@@ -116,7 +116,6 @@ function matchesTrigger(
 
 function buildTriggerContext(payload: LinearWebhookPayload): string {
   const d = payload.data;
-  const fromState = payload.updatedFrom?.state?.name;
   const toState = d.state?.name;
 
   const lines: string[] = [
@@ -125,7 +124,7 @@ function buildTriggerContext(payload: LinearWebhookPayload): string {
     `This agent was triggered by a Linear issue status change.`,
     ``,
     `- **Issue:** ${d.identifier ?? d.id} — ${d.title ?? "(no title)"}`,
-    `- **Status change:** ${fromState ?? "(unknown)"} → ${toState ?? "(unknown)"}`,
+    `- **Status:** ${toState ?? "(unknown)"}`,
   ];
 
   if (d.team) lines.push(`- **Team:** ${d.team.key} (${d.team.name})`);
@@ -182,8 +181,9 @@ router.post("/linear", async (req: Request, res: Response) => {
 
   // Only trigger on actual status changes, not other field updates.
   // Linear always includes data.state (current state) on Issue updates,
-  // but updatedFrom.state is only present when the state field changed.
-  if (payload.action === "update" && !payload.updatedFrom?.state) {
+  // but updatedFrom.stateId is only present when the state field changed.
+  if (payload.action === "update" && !payload.updatedFrom?.stateId) {
+    console.log(`[webhook/linear] Skipped: not a status change (updatedFrom keys: ${Object.keys(payload.updatedFrom ?? {}).join(", ") || "none"})`);
     res.json({ ok: true, matched: 0, reason: "not a status change" });
     return;
   }
@@ -238,7 +238,7 @@ router.post("/linear", async (req: Request, res: Response) => {
         if (!matchesTrigger(trigger, payload)) continue;
 
         // Download attachments once per project on first matching agent
-        if (projectAttachmentsDir === undefined && issueDescription) {
+        if (projectAttachmentsDir === undefined) {
           try {
             const result = await downloadIssueAttachments(
               project.id,
