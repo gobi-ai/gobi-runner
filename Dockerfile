@@ -42,14 +42,21 @@ RUN git config --global user.email "agent@runner.local" && \
     git config --global user.name "Agent Runner"
 
 # Pre-clone repos into the image so agents start with code already present.
-# GITHUB_REPOS is a space-separated list of "org/repo" paths, passed as a build arg.
-# The cron job reads it from .runner/config.json:
-#   --build-arg GITHUB_REPOS="$(jq -r '.githubRepos // [] | join(" ")' /path/to/.runner/config.json)"
-# Repos are shallow-cloned on develop. The entrypoint pulls latest at session start.
+# ROOT_REPO is cloned as /monorepo itself (the workspace root).
+# GITHUB_REPOS are cloned inside /monorepo/ as subdirectories.
+# The entrypoint pulls latest at session start.
+ARG ROOT_REPO=""
 ARG GITHUB_REPOS=""
 WORKDIR /monorepo
 RUN --mount=type=secret,id=gh_token,uid=1000 \
     export GH_TOKEN=$(cat /run/secrets/gh_token) && \
+    if [ -n "${ROOT_REPO}" ]; then \
+      git clone --depth=1 \
+        "https://x-access-token:${GH_TOKEN}@github.com/${ROOT_REPO}.git" \
+        /tmp/_root 2>/dev/null && \
+      cp -a /tmp/_root/. /monorepo/ && rm -rf /tmp/_root || \
+      echo "WARN: could not clone root repo ${ROOT_REPO}"; \
+    fi && \
     for repo in ${GITHUB_REPOS}; do \
       name=$(basename "$repo") && \
       git clone --depth=1 --branch develop \

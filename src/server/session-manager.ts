@@ -103,6 +103,7 @@ function buildDockerArgs(
     "-e", `PERMISSION_MODE=${agent.permissionMode}`,
     "-e", `MODEL=${agent.model ?? ""}`,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
+    "-e", `ROOT_REPO=${config.rootRepo ?? ""}`,
     "-e", `GITHUB_REPOS=${(config.githubRepos ?? []).join(" ")}`,
     "-e", `AGENT_TOOLS=${(agent.tools ?? []).join(",")}`,
     // Langfuse credentials (only used when tools includes "langfuse")

@@ -7,7 +7,9 @@ export interface Project {
 
 /** Per-project config stored at <targetDir>/.runner/config.json */
 export interface ProjectConfig {
-  /** GitHub repos to clone into agent containers (full "org/repo" paths) */
+  /** Root repo cloned as /monorepo itself — agents can commit to it (full "org/repo" path) */
+  rootRepo?: string;
+  /** GitHub repos cloned inside /monorepo/ (full "org/repo" paths) */
   githubRepos?: string[];
   /** Local directories to mount read-only into agent containers */
   localDirs?: string[];

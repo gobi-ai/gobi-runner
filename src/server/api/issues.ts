@@ -186,6 +186,7 @@ function buildDockerArgs(project: Project, identifier: string, sessionId: string
     "--name", containerName,
     "-e", `PROVIDER=${provider.id}`,
     "-e", `LINEAR_API_KEY=${process.env.LINEAR_API_KEY ?? ""}`,
+    "-e", `ROOT_REPO=${config.rootRepo ?? ""}`,
     "-e", `GITHUB_REPOS=${(config.githubRepos ?? []).join(" ")}`,
     ...providerEnv,
     "-v", `${project.targetDir}:/source:ro`,

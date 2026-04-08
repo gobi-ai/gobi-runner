@@ -41,25 +41,52 @@ if [[ ! -f "$AGENT_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Clone or update GitHub repos
+# Pull/clone root repo (the /monorepo directory itself)
+# ROOT_REPO is the "org/repo" path for the workspace root.
+# ---------------------------------------------------------------------------
+pull_or_clone() {
+  local full_repo="$1" repo_dir="$2"
+  local repo_name
+  repo_name=$(basename "$full_repo")
+  if [[ -d "$repo_dir/.git" ]]; then
+    git -C "$repo_dir" fetch origin --quiet 2>/dev/null
+    # Use develop if it exists, otherwise main
+    local branch
+    if git -C "$repo_dir" rev-parse --verify origin/develop &>/dev/null; then
+      branch=develop
+    else
+      branch=main
+    fi
+    git -C "$repo_dir" checkout "$branch" --quiet 2>/dev/null && \
+    git -C "$repo_dir" reset --hard "origin/${branch}" --quiet 2>/dev/null && \
+    echo "  ✓ ${repo_name} (pulled ${branch})" || echo "  ⚠ Could not pull ${branch} for ${repo_name}"
+  else
+    git clone --depth=1 --branch develop "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null || \
+    git clone --depth=1 "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null
+    if [[ -d "$repo_dir/.git" ]]; then
+      local branch
+      branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD)
+      echo "  ✓ ${repo_name} (cloned ${branch})"
+    else
+      echo "  ⚠ Could not clone ${full_repo}"
+    fi
+  fi
+}
+
+if [[ -n "${ROOT_REPO:-}" ]]; then
+  echo "→ Syncing root repo..."
+  pull_or_clone "${ROOT_REPO}" /monorepo
+fi
+
+# ---------------------------------------------------------------------------
+# Clone or update sub-repos inside /monorepo/
 # GITHUB_REPOS contains full "org/repo" paths (e.g. "myorg/backend myorg/frontend")
 # ---------------------------------------------------------------------------
 if [[ -n "${GITHUB_REPOS:-}" ]]; then
   echo "→ Syncing GitHub repos..."
   for full_repo in ${GITHUB_REPOS}; do
     repo_name=$(basename "$full_repo")
-    repo_dir="/monorepo/${repo_name}"
-    if [[ -d "$repo_dir/.git" ]]; then
-      # Repo already exists (baked into image) — pull latest develop
-      git -C "$repo_dir" fetch origin --quiet 2>/dev/null && \
-      git -C "$repo_dir" checkout develop --quiet 2>/dev/null && \
-      git -C "$repo_dir" reset --hard origin/develop --quiet 2>/dev/null && \
-      echo "  ✓ ${repo_name} (pulled develop)" || echo "  ⚠ Could not pull develop for ${repo_name}"
-    else
-      # Not in image — fresh clone on develop
-      git clone --depth=1 --branch develop "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null && \
-      echo "  ✓ ${repo_name} (cloned develop)" || echo "  ⚠ Could not clone ${full_repo}"
-    fi
+    pull_or_clone "${full_repo}" "/monorepo/${repo_name}"
   done
 fi
 
@@ -77,12 +104,15 @@ if [[ -d /local ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Copy shared MD files into /monorepo root
+# Copy shared MD files into /monorepo root (only when no rootRepo — otherwise
+# they already exist from the clone)
 # ---------------------------------------------------------------------------
-cp -f  /source/CLAUDE.md  /monorepo/CLAUDE.md  2>/dev/null || true
-cp -f  /source/LINEAR.md  /monorepo/LINEAR.md  2>/dev/null || true
-cp -rf /source/approvers  /monorepo/approvers  2>/dev/null || true
-cp -rf /source/actors     /monorepo/actors     2>/dev/null || true
+if [[ -z "${ROOT_REPO:-}" ]]; then
+  cp -f  /source/CLAUDE.md  /monorepo/CLAUDE.md  2>/dev/null || true
+  cp -f  /source/LINEAR.md  /monorepo/LINEAR.md  2>/dev/null || true
+  cp -rf /source/approvers  /monorepo/approvers  2>/dev/null || true
+  cp -rf /source/actors     /monorepo/actors     2>/dev/null || true
+fi
 
 # ---------------------------------------------------------------------------
 # Strip YAML frontmatter from agent file → /tmp/agent-prompt.md

@@ -27,19 +27,23 @@ for i in $(seq 0 $((PROJECT_COUNT - 1))); do
   IMAGE_NAME=$(jq -r ".projects[$i].dockerImage // \"agent-runner-${PROJECT_ID}:latest\"" "$RUNNER_JSON")
   CONFIG_JSON="${TARGET_DIR}/.runner/config.json"
 
+  ROOT_REPO=""
   REPOS=""
   if [[ -f "$CONFIG_JSON" ]]; then
+    ROOT_REPO=$(jq -r '.rootRepo // ""' "$CONFIG_JSON")
     REPOS=$(jq -r '.githubRepos // [] | join(" ")' "$CONFIG_JSON")
   fi
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  Project : ${PROJECT_ID}"
   echo "  Image   : ${IMAGE_NAME}"
+  echo "  Root    : ${ROOT_REPO:-none}"
   echo "  Repos   : ${REPOS:-none}"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   DOCKER_BUILDKIT=1 docker build \
     --secret id=gh_token,env=GH_TOKEN \
+    --build-arg ROOT_REPO="${ROOT_REPO}" \
     --build-arg GITHUB_REPOS="${REPOS}" \
     -t "${IMAGE_NAME}" \
     "${SCRIPT_DIR}"
