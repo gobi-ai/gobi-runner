@@ -50,15 +50,15 @@ if [[ -n "${GITHUB_REPOS:-}" ]]; then
     repo_name=$(basename "$full_repo")
     repo_dir="/monorepo/${repo_name}"
     if [[ -d "$repo_dir/.git" ]]; then
-      # Repo already exists — pull latest
-      branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+      # Repo already exists (baked into image) — pull latest develop
       git -C "$repo_dir" fetch origin --quiet 2>/dev/null && \
-      git -C "$repo_dir" reset --hard "origin/${branch}" --quiet 2>/dev/null && \
-      echo "  ✓ ${repo_name} (updated)" || echo "  ⚠ Could not update ${repo_name}"
+      git -C "$repo_dir" checkout develop --quiet 2>/dev/null && \
+      git -C "$repo_dir" reset --hard origin/develop --quiet 2>/dev/null && \
+      echo "  ✓ ${repo_name} (pulled develop)" || echo "  ⚠ Could not pull develop for ${repo_name}"
     else
-      # Fresh clone (shallow for speed)
-      git clone --depth=1 "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null && \
-      echo "  ✓ ${repo_name} (cloned)" || echo "  ⚠ Could not clone ${full_repo}"
+      # Not in image — fresh clone on develop
+      git clone --depth=1 --branch develop "https://github.com/${full_repo}.git" "$repo_dir" 2>/dev/null && \
+      echo "  ✓ ${repo_name} (cloned develop)" || echo "  ⚠ Could not clone ${full_repo}"
     fi
   done
 fi

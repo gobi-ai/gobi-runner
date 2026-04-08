@@ -41,6 +41,30 @@ USER agent
 RUN git config --global user.email "agent@runner.local" && \
     git config --global user.name "Agent Runner"
 
+# Pre-clone repos into the image so agents start with code already present.
+# The GH_TOKEN build secret is supplied by the cron job:
+#   docker build --secret id=gh_token,env=GH_TOKEN ...
+# Repos are shallow-cloned on the develop branch. The entrypoint pulls
+# latest develop at session start, so stale clones just mean a faster pull.
+WORKDIR /monorepo
+RUN --mount=type=secret,id=gh_token,uid=1000 \
+    export GH_TOKEN=$(cat /run/secrets/gh_token) && \
+    for repo in \
+      gobi-ai/gobi-app \
+      gobi-ai/gobi-backend \
+      gobi-ai/gobi-cli \
+      gobi-ai/gobi-cloud \
+      gobi-ai/gobi-desktop \
+      gobi-ai/gobi-web \
+      gobi-ai/gobi-webdrive \
+    ; do \
+      name=$(basename "$repo") && \
+      git clone --depth=1 --branch develop \
+        "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" \
+        "/monorepo/${name}" 2>/dev/null || \
+      echo "WARN: could not clone ${repo}"; \
+    done
+
 # Entrypoint + provider-specific scripts
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
 COPY --chmod=755 entrypoints/ /entrypoints/
