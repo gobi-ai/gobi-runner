@@ -358,13 +358,11 @@ router.post("/github", async (req: Request, res: Response) => {
       headers: { "Authorization": apiKey, "Content-Type": "application/json" },
       body: JSON.stringify({
         query: `query($identifier: String!) {
-          issueSearch(query: $identifier, first: 1) {
-            nodes {
-              id
-              title
-              team {
-                states { nodes { id name type } }
-              }
+          issue(id: $identifier) {
+            id
+            title
+            team {
+              states { nodes { id name type } }
             }
           }
         }`,
@@ -373,7 +371,7 @@ router.post("/github", async (req: Request, res: Response) => {
     });
 
     const searchData = await searchRes.json() as any;
-    const issue = searchData.data?.issueSearch?.nodes?.[0];
+    const issue = searchData.data?.issue;
     if (!issue) {
       res.json({ ok: false, reason: `Linear issue ${identifier} not found` });
       return;
